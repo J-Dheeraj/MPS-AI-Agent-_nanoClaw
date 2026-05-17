@@ -1,0 +1,69 @@
+# nanoclaw.yaml — NanoClaw / MPS-AI-Agent configuration
+# Place at: ~/nanoclaw/nanoclaw.yaml
+
+agent:
+  name: assistant          # Change to MP's name or preferred agent name
+  version: 2
+
+# ---------------------------------------------------------------------------
+# MCP servers — wired into every agent session
+# ---------------------------------------------------------------------------
+
+mcp_servers:
+
+  # MPS CRM Bridge — case management, constituent lookup, letter storage
+  - name: mps-crm
+    transport: stdio
+    command: python3
+    args:
+      - mcp-crm-server.py
+    env:
+      CRM_BACKEND: sqlite          # sqlite | google_sheets | rest_api | sharepoint | csv
+      CRM_DATA_DIR: ~/nanoclaw/crm-data
+      CRM_SQLITE_FILE: mps-cases.db
+    # For Google Sheets backend, replace the env block above with:
+    # env:
+    #   CRM_BACKEND: google_sheets
+    #   CRM_GSHEET_ID: <your-spreadsheet-id>
+    #   CRM_GSHEET_CREDENTIALS: ~/nanoclaw/crm-data/gsheet-credentials.json
+    #
+    # For SharePoint backend:
+    # env:
+    #   CRM_BACKEND: sharepoint
+    #   CRM_SP_SITE_URL: https://yourorg.sharepoint.com/sites/MPS
+    #   CRM_SP_CLIENT_ID: <client-id>
+    #   CRM_SP_CLIENT_SECRET: <client-secret>
+    #   CRM_SP_LIST_NAME: MPS Cases
+
+# ---------------------------------------------------------------------------
+# Groups — one entry per messaging channel group
+# ---------------------------------------------------------------------------
+
+groups:
+  main:
+    claude_md: groups/main/CLAUDE.md
+    description: MP's primary channel — WhatsApp or Telegram
+    elevated: true            # Main group has elevated privileges
+
+# ---------------------------------------------------------------------------
+# Scheduler defaults
+# ---------------------------------------------------------------------------
+
+scheduler:
+  timezone: Asia/Singapore
+
+# ---------------------------------------------------------------------------
+# OneCLI Agent Vault proxy
+# ---------------------------------------------------------------------------
+
+onecli:
+  port: 4891
+  proxy_target: https://api.anthropic.com
+
+# ---------------------------------------------------------------------------
+# Web UI
+# ---------------------------------------------------------------------------
+
+webui:
+  host: 127.0.0.1            # Never change to 0.0.0.0
+  port: 3080

@@ -141,6 +141,83 @@ Includes a 6-question verification test to confirm historical knowledge depth.
 
 ---
 
+## CRM Bridge — case management integration
+
+`mcp-crm-server.py` is a Model Context Protocol (MCP) server that connects the agent directly to your case management system. Once wired in, the agent can look up constituent history, log new cases, attach letters, update case status, and surface overdue cases — all from within the chat.
+
+### Supported backends
+
+| Backend | `CRM_BACKEND` value | Best for |
+|---|---|---|
+| **SQLite** | `sqlite` | Default — no infrastructure, works immediately |
+| **Google Sheets** | `google_sheets` | Shared spreadsheet accessible by MP's office team |
+| **REST API** | `rest_api`` | Existing CRM system with a JSON API |
+| **SharePoint** | `sharepoint` | Organisations already on Microsoft 365 |
+| **CSV** | `csv` | Read-only import of legacy case exports |
+
+### Install
+
+```bash
+pip install -r requirements-crm.txt
+```
+
+### Wire into NanoClaw
+
+The `nanoclaw.yaml` file at the project root configures the MCP server. Edit the `mcp_servers` section to match your backend:
+
+```yaml
+mcp_servers:
+  - name: mps-crm
+    transport: stdio
+    command: python3
+    args: [mcp-crm-server.py]
+    env:
+      CRM_BACKEND: sqlite
+      CRM_DATA_DIR: ~/nanoclaw/crm-data
+```
+
+### MCP tools exposed to the agent
+
+| Tool | What the agent can do |
+|---|---|
+| `lookup_constituent` | Pull full profile + all past cases + letters before an MP meeting |
+| `create_case` | Log a new case with issue type, agency, urgency, and volunteer name |
+| `attach_letter` | Store the full text of a drafted appeal letter against its case |
+| `update_case_status` | Mark a case as replied / resolved / escalated when agency responds |
+| `get_pending_cases` | List all open cases with no reply after N days (default 21) |
+| `get_todays_queue` | Show tonight's MPS case list sorted by urgency |
+
+### How it fits into the MPS workflow
+
+```
+MP opens MPS session
+  → agent calls get_todays_queue()         — see tonight's cases
+  → constituent sits down
+  → agent calls lookup_constituent(nric)   — full history surfaces instantly
+  → agent triages issue, drafts letter
+  → agent calls create_case()              — case logged
+  → agent calls attach_letter()            — letter saved
+  → agency replies next week
+  → MP tells agent "HDB replied to case 47, resolved"
+  → agent calls update_case_status()       — record updated
+  → Monday briefing
+  → agent calls get_pending_cases(21)      — flags overdue cases
+```
+
+### Google Sheets setup (if using that backend)
+
+1. Create a Google Cloud project and enable the Sheets + Drive APIs
+2. Create a service account → download the JSON key
+3. Save the key to `~/nanoclaw/crm-data/gsheet-credentials.json`
+4. Create a blank Google Sheets spreadsheet
+5. Share it with the service account email (Editor access)
+6. Copy the spreadsheet ID from the URL into `CRM_GSHEET_ID`
+7. Set `CRM_BACKEND=google_sheets` in `.env`
+
+The server creates the `Cases`, `Constituents`, and `Letters` worksheets automatically on first run.
+
+---
+
 ## Security
 
 Constituent data is highly sensitive. Every security control is non-negotiable.
@@ -356,6 +433,9 @@ nanoclaw/
 │       ├── singapore-knowledge-ingestion.md  ← 60+ current policy URLs, priority 1–10
 │       ├── singapore-historical-policies.md  ← 70-year policy history, 9 tiers
 │       └── singapore-auto-update-tasks.md    ← 10 scheduled task blocks for auto-monitoring
+├── mcp-crm-server.py                         ← CRM Bridge MCP server (5 backends)
+├── requirements-crm.txt                      ← Python deps for CRM bridge
+├── nanoclaw.yaml                             ← NanoClaw config + MCP server wiring
 ├── src/
 │   ├── index.ts                   # Host process orchestrator
 │   ├── router/index.ts            # Message routing + sender validation

@@ -1,0 +1,18 @@
+# MPS CRM Bridge — Python dependencies
+# Install with: pip install -r requirements-crm.txt
+#
+# Core (always required)
+fastmcp
+python-dotenv
+
+# Google Sheets backend (CRM_BACKEND=google_sheets)
+gspread
+oauth2client
+
+# REST API backend (CRM_BACKEND=rest_api)
+requests
+
+# SharePoint backend (CRM_BACKEND=sharepoint)
+Office365-REST-Python-Client
+
+# SQLite and CSV backends have no extra dependencies (stdlib only)
