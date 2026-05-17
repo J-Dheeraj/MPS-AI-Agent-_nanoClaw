@@ -45,31 +45,34 @@ Built-in knowledge of every agency encountered at MPS:
 ## Architecture
 
 ```
-MP's devices                    Volunteers' devices
-(WhatsApp / Telegram / Web UI)  (WhatsApp group)
-        │                               │
-        └──────────────┬────────────────┘
-                       ▼
-        MPS-AI-Agent host process  (Node.js · src/index.ts)
-          ├─ Router          → validates sender allowlist → writes to inbound.db
-          ├─ Container runner → one isolated Docker container per group
-          ├─ Delivery        → polls outbound.db → sends replies
-          ├─ Scheduler       → briefings, digests, policy auto-updates
-          └─ OneCLI proxy    → intercepts all container HTTPS → injects credentials
-                       │
-          ┌────────────┴─────────────┐
-          ▼                          ▼
-  Docker: group/main           Docker: group/mps-volunteers
-  (MP — role: owner)           (intake team — role: member)
-  ├─ Claude Agent SDK          ├─ Claude Agent SDK
-  ├─ mnemon (knowledge graph)  ├─ mnemon (knowledge graph)
-  ├─ whisper.cpp               ├─ whisper.cpp
-  ├─ Ollama client             ├─ Ollama client
-  ├─ MCP: crm-bridge ──────────┤  MCP: crm-bridge
-  └─ groups/main/ (4 files)   └─ groups/main/ (4 files)
-          │                          │
-          ▼                          ▼
-    inbound.db / outbound.db   inbound.db / outbound.db
+MP's devices          Volunteers' devices      Vetters' devices
+(WhatsApp/Telegram/   (WhatsApp group)         (WhatsApp group)
+ Web UI)
+        │                    │                        │
+        └────────────────────┼────────────────────────┘
+                             ▼
+          MPS-AI-Agent host process  (Node.js · src/index.ts)
+            ├─ Router          → validates sender allowlist → writes to inbound.db
+            ├─ Container runner → one isolated Docker container per group
+            ├─ Delivery        → polls outbound.db → sends replies
+            ├─ Scheduler       → briefings, digests, policy auto-updates
+            └─ OneCLI proxy    → intercepts all container HTTPS → injects credentials
+                             │
+          ┌──────────────────┼──────────────────┐
+          ▼                  ▼                  ▼
+  Docker: main         Docker: mps-volunteers  Docker: mps-vetters
+  (MP — owner)         (intake — member)       (vetters — member)
+  ├─ Claude SDK        ├─ Claude SDK           ├─ Claude SDK
+  ├─ mnemon            ├─ mnemon               ├─ mnemon
+  ├─ whisper.cpp       ├─ whisper.cpp          ├─ whisper.cpp
+  ├─ Ollama client     ├─ Ollama client        ├─ Ollama client
+  ├─ MCP: crm-bridge   ├─ MCP: crm-bridge      │  (no CRM access)
+  └─ groups/main/      └─ groups/main/         └─ groups/mps-vetters/
+     (4 policy files)     (4 policy files)        (CLAUDE.md)
+          │                  │
+          ▼                  ▼
+    inbound.db /       inbound.db /
+    outbound.db        outbound.db
           │
           ▼
     mcp-crm-server.py  (FastMCP, stdio)
@@ -78,9 +81,11 @@ MP's devices                    Volunteers' devices
 
 ---
 
-## Knowledge base — groups/main/
+## Knowledge base and group identities
 
-All four files live in `groups/main/` and are loaded into the agent's context at the start of every session.
+### groups/main/ — MP's private channel
+
+All four files are loaded into the MP agent's context at the start of every session.
 
 ### `CLAUDE.md` — Agent identity and core knowledge
 
@@ -130,7 +135,23 @@ Includes 6 post-ingest test queries and a weekly reminder schedule.
 
 Includes a 6-question verification test to confirm historical knowledge depth.
 
-### `singapore-auto-update-tasks.md` — Permanent policy currency
+---
+
+### groups/mps-vetters/ — Vetter team channel
+
+**`CLAUDE.md`** defines a focused, read-only review agent that helps vetters quality-check draft letters before the MP approves them. This agent:
+
+- **Does not draft letters from scratch** — that is the volunteer's role
+- **Runs 5 checks on every draft:** agency name accuracy, scheme/policy accuracy, request clarity, tone, and missing information (NRIC, address, contact, MP office email)
+- **Returns a clear verdict:** PASS / NEEDS REVISION / FLAG with line-by-line corrections
+- **Carries 2025/2026 policy quick-reference** for HDB, CPF, MOH, MSF, MOM, and ICA — so vetters can fact-check figures without leaving the WhatsApp group
+- **Escalates immediately** if a case involves child abuse, domestic violence, suicidal ideation, a criminal matter, or a medical emergency — with the correct hotline number
+
+See `mps-workflow-integration.md` for the complete three-stage workflow (intake → vetter review → MP approval) and the side-by-side comparison of what goes in the MPS platform vs. NanoClaw.
+
+---
+
+### `singapore-auto-update-tasks.md` — Permanent policy currency (groups/main/)
 
 10 copy-paste task blocks to set up automated policy monitoring:
 
@@ -190,9 +211,13 @@ groups:
   mps-volunteers:
     role: member             # Intake volunteers
     mcp_servers: [crm-bridge]
+  mps-vetters:
+    role: member             # Vetter review team — policy lookup only, no CRM
+    claude_md: groups/mps-vetters/CLAUDE.md
+    mcp_servers: []          # No case creation or constituent lookup
 ```
 
-See `nanoclaw-crm-wiring.yaml` for the full copy-paste wiring guide with all 5 backend configurations, verification steps, and a complete annotated MPS session example.
+See `nanoclaw-crm-wiring.yaml` for the full copy-paste wiring guide including Block 4 (vetters group), all 5 backend configurations, verification steps, and a complete annotated MPS session example.
 
 ### MCP tools exposed to the agent
 
@@ -446,15 +471,18 @@ ollama list | grep nomic-embed-text
 ```
 nanoclaw/
 ├── groups/
-│   └── main/
-│       ├── CLAUDE.md                         ← Agent identity, roles, agency knowledge, letter format
-│       ├── singapore-knowledge-ingestion.md  ← 60+ current policy URLs, priority 1–10
-│       ├── singapore-historical-policies.md  ← 70-year policy history, 9 tiers
-│       └── singapore-auto-update-tasks.md    ← 10 scheduled task blocks for auto-monitoring
+│   ├── main/
+│   │   ├── CLAUDE.md                         ← MP agent identity, roles, agency knowledge, letter format
+│   │   ├── singapore-knowledge-ingestion.md  ← 60+ current policy URLs, priority 1–10
+│   │   ├── singapore-historical-policies.md  ← 70-year policy history, 9 tiers
+│   │   └── singapore-auto-update-tasks.md    ← 10 scheduled task blocks for auto-monitoring
+│   └── mps-vetters/
+│       └── CLAUDE.md                         ← Vetter agent: 5-check review, PASS/FAIL verdicts, escalation flags
+├── mps-workflow-integration.md               ← 3-stage workflow, platform vs NanoClaw, Playwright roadmap
 ├── mcp-crm-server.py                         ← CRM Bridge MCP server (5 backends)
-├── nanoclaw-crm-wiring.yaml                  ← Copy-paste wiring guide for nanoclaw.yaml
+├── nanoclaw-crm-wiring.yaml                  ← Copy-paste wiring guide (4 blocks: main, volunteers, vetters)
 ├── requirements-crm.txt                      ← Python deps for CRM bridge
-├── nanoclaw.yaml                             ← Full config: 2 groups, MCP wired to both
+├── nanoclaw.yaml                             ← Full config: 3 groups, MCP wired to main + volunteers
 ├── src/
 │   ├── index.ts                   # Host process orchestrator
 │   ├── router/index.ts            # Message routing + sender validation

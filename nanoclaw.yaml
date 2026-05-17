@@ -64,6 +64,13 @@ groups:
     mcp_servers:
       - crm-bridge                           # CRM tools available to volunteers too
 
+  # ── Vetters group (review team) ──────────────────────────────────────────
+  mps-vetters:
+    role: member                             # Policy verification only — cannot create cases
+    claude_md: groups/mps-vetters/CLAUDE.md  # Vetter-specific identity: verify, flag, improve
+    elevated: false
+    mcp_servers: []                          # No CRM access — vetters do not log cases
+
 # ---------------------------------------------------------------------------
 # Sender security — enforced before any message reaches the agent
 # ---------------------------------------------------------------------------
@@ -83,6 +90,12 @@ groups:
 #       "allowedSenders": [
 #         "6591234567@s.whatsapp.net",
 #         "6598765432@s.whatsapp.net"
+#       ]
+#     },
+#     "mps-vetters": {
+#       "mode": "drop",
+#       "allowedSenders": [
+#         "6591234567@s.whatsapp.net"
 #       ]
 #     }
 #   }

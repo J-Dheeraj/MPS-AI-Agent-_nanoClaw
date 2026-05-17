@@ -12,8 +12,8 @@
 # Add the mcp_servers block at the TOP LEVEL of nanoclaw.yaml
 # (same indentation level as "groups:" and "channels:").
 #
-# Then add the groups/main and groups/mps-volunteers sections
-# if they are not already present.
+# Then add the groups/main, groups/mps-volunteers, and groups/mps-vetters
+# sections if they are not already present.
 # ──────────────────────────────────────────────────────────────────────────
 
 # ┌─────────────────────────────────────────────────────────┐
@@ -48,6 +48,17 @@ groups:
     mcp_servers:
       - crm-bridge
     # ... rest of your existing mps-volunteers group config ...
+
+# ┌─────────────────────────────────────────────────────────┐
+# │  PASTE BLOCK 4 — vetters group (no CRM access)          │
+# └─────────────────────────────────────────────────────────┘
+  mps-vetters:
+    role: member
+    claude_md: groups/mps-vetters/CLAUDE.md  # Vetter identity — policy verify only
+    mcp_servers: []                          # Vetters do not log or modify cases
+    # Vetters only fact-check and improve draft letters.
+    # They do not create cases or access constituent records.
+    # Add vetter phone numbers to sender-allowlist.json under "mps-vetters".
 
 # ── HOW TO SWITCH BACKENDS ────────────────────────────────────────────────
 #
