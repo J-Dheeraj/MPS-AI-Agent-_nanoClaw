@@ -1,10 +1,38 @@
-# MPS-AI-Agent — Personal AI Agent for Singapore MPs
+# MPS-AI-Agent — nanoClaw (Production System)
 
 A self-hosted personal AI agent purpose-built for Singapore Members of Parliament conducting **Meet-the-People Sessions (MPS)** and constituency casework.
 
 The agent acts as a trusted aide — briefing the MP before each constituent meeting, triaging cases to the correct government agency in real time, drafting formal appeal letters, and maintaining a private knowledge graph of policy, cases, and constituent history. All data stays on-device. No constituent information is ever sent to a cloud service.
 
-Built on the NanoClaw v2 platform with Claude (Anthropic Agent SDK).
+Built on the **NanoClaw v2** platform with Claude (Anthropic Agent SDK).
+
+> **Combined system:** This repo is the production half of a two-system architecture. The companion repo [MPS-AI-Agent-Hermes](https://github.com/J-Dheeraj/MPS-AI-Agent-Hermes) runs offline as a weekly skill improvement engine (GEPA). See [INTEGRATION.md](./INTEGRATION.md) for the full workflow.
+
+---
+
+## Two-system architecture
+
+```
+nanoClaw (this repo) ──────────────────────────────────────────
+  Live constituent interactions (WhatsApp, Telegram, Web UI)
+  Security: OneCLI vault, Docker isolation, local AI, drop mode
+  Knowledge: mnemon graph, 60+ URL ingestion, auto policy watch
+  CRM: case logging, letter storage, overdue tracking
+                │
+                │  Weekly — anonymised correction patterns only
+                │  No NRIC. No names. No case IDs.
+                ▼
+Hermes (companion repo) ───────────────────────────────────────
+  Offline skill improvement engine — no live connections
+  GEPA processes correction patterns from feedback-log.md
+  Generates updated skill files reviewed before applying
+                │
+                │  Approved improvements → CLAUDE.md update
+                ▼
+nanoClaw restarts with improved knowledge
+```
+
+**Security boundary:** constituent data never crosses to Hermes. See [INTEGRATION.md](./INTEGRATION.md) for the full security rules and weekly workflow.
 
 ---
 
@@ -20,6 +48,7 @@ Built on the NanoClaw v2 platform with Claude (Anthropic Agent SDK).
 | **Pending case digest** | Weekly summary of cases awaiting agency replies |
 | **Scheduled briefings** | Morning or pre-MPS summaries of pending matters and recent policy changes |
 | **Auto policy updates** | Monitors 8 agency newsrooms daily and ingests new announcements automatically |
+| **Self-improvement** | Correction patterns logged via `/feedback` are processed weekly by Hermes GEPA and applied back |
 
 ---
 
@@ -115,8 +144,6 @@ Defines the agent's identity, roles, and all agency policy knowledge with 2025/2
 | 10 | CDC/PA | CDC Vouchers 2026, grassroots |
 | + | Portals | Budget 2025, COS 2026, SupportGoWhere, LifeSG, OneService |
 
-Includes 6 post-ingest test queries and a weekly reminder schedule.
-
 ### `singapore-historical-policies.md` — 70 years of policy history
 
 9-tier archive giving the agent historical depth so it can explain *why* policies exist, not just what they are:
@@ -133,25 +160,7 @@ Includes 6 post-ingest test queries and a weekly reminder schedule.
 | 8 | Committee of Supply debate archives |
 | 9 | Academic research papers (ADB, SMU, UNRISD, NUS) |
 
-Includes a 6-question verification test to confirm historical knowledge depth.
-
----
-
-### groups/mps-vetters/ — Vetter team channel
-
-**`CLAUDE.md`** defines a focused, read-only review agent that helps vetters quality-check draft letters before the MP approves them. This agent:
-
-- **Does not draft letters from scratch** — that is the volunteer's role
-- **Runs 5 checks on every draft:** agency name accuracy, scheme/policy accuracy, request clarity, tone, and missing information (NRIC, address, contact, MP office email)
-- **Returns a clear verdict:** PASS / NEEDS REVISION / FLAG with line-by-line corrections
-- **Carries 2025/2026 policy quick-reference** for HDB, CPF, MOH, MSF, MOM, and ICA — so vetters can fact-check figures without leaving the WhatsApp group
-- **Escalates immediately** if a case involves child abuse, domestic violence, suicidal ideation, a criminal matter, or a medical emergency — with the correct hotline number
-
-See `mps-workflow-integration.md` for the complete three-stage workflow (intake → vetter review → MP approval) and the side-by-side comparison of what goes in the MPS platform vs. NanoClaw.
-
----
-
-### `singapore-auto-update-tasks.md` — Permanent policy currency (groups/main/)
+### `singapore-auto-update-tasks.md` — Permanent policy currency
 
 10 copy-paste task blocks to set up automated policy monitoring:
 
@@ -168,33 +177,90 @@ See `mps-workflow-integration.md` for the complete three-stage workflow (intake 
 | 9 | `annual-policy-calendar` | Key annual dates | CPF rate day, Budget month, COS month, mid-year |
 | 10 | Task management | On demand | `/tasks`, pause, resume, stop |
 
+### `feedback-log.md` — Weekly improvement input
+
+Logs anonymised policy corrections after each MPS session for processing by Hermes GEPA. Format:
+
+```
+/feedback [wrong thing agent said] → [correct answer] | agency: [HDB/CPF/MOH/MSF/MOM/ICA]
+```
+
+No NRIC, no names, no case IDs — anonymised patterns only. Processed weekly by `weekly-skill-update.sh`.
+
+---
+
+### groups/mps-vetters/ — Vetter team channel
+
+**`CLAUDE.md`** defines a focused, read-only review agent that helps vetters quality-check draft letters before the MP approves them. This agent:
+
+- **Does not draft letters from scratch** — that is the volunteer's role
+- **Runs 5 checks on every draft:** agency name accuracy, scheme/policy accuracy, request clarity, tone, and missing information
+- **Returns a clear verdict:** PASS / NEEDS REVISION / FLAG with line-by-line corrections
+- **Carries 2025/2026 policy quick-reference** for HDB, CPF, MOH, MSF, MOM, and ICA
+- **Escalates immediately** for child abuse, domestic violence, suicidal ideation, criminal matters, or medical emergencies — with the correct hotline number
+
+---
+
+## Self-improvement via Hermes GEPA
+
+nanoClaw's knowledge base grows through ingestion. Agent reasoning improves through weekly GEPA cycles in the companion Hermes repo.
+
+### During MPS sessions
+
+Type in the main group chat after spotting an error:
+
+```
+/feedback EHG ceiling cited as $9,000 → correct ceiling is $8,000 for families | agency: HDB
+```
+
+The agent logs an anonymised correction to `groups/main/feedback-log.md`.
+
+### Every Sunday
+
+```bash
+bash weekly-skill-update.sh
+```
+
+The script:
+1. Scans feedback-log.md for NRIC/phone patterns — rejects if found
+2. Prompts manual review before any export
+3. Sends anonymised patterns to Hermes GEPA
+4. Shows generated skill improvements for your review
+5. Prompts you to merge approved changes into CLAUDE.md
+6. Restarts nanoClaw
+7. Archives the week's log
+
+Full workflow: [INTEGRATION.md](./INTEGRATION.md)
+
 ---
 
 ## CRM Bridge — case management integration
 
-`mcp-crm-server.py` is a Model Context Protocol (MCP) server that connects the agent directly to your case management system. Once wired in, the agent can look up constituent history, log new cases, attach letters, update case status, and surface overdue cases — all from within the chat.
-
-### Supported backends
+`mcp-crm-server.py` connects the agent to your case records via MCP. Five backends supported:
 
 | Backend | `CRM_BACKEND` value | Best for |
 |---|---|---|
 | **SQLite** | `sqlite` | Default — no infrastructure, works immediately |
 | **Google Sheets** | `google_sheets` | Shared spreadsheet accessible by MP's office team |
-| **REST API** | `rest_api`` | Existing CRM system with a JSON API |
+| **REST API** | `rest_api` | Existing CRM system with a JSON API |
 | **SharePoint** | `sharepoint` | Organisations already on Microsoft 365 |
 | **CSV** | `csv` | Read-only import of legacy case exports |
 
-### Install
+### MCP tools available to the agent
 
-```bash
-pip install -r requirements-crm.txt
-```
+| Tool | What the agent can do |
+|---|---|
+| `lookup_constituent` | Pull full profile + all past cases + letters before an MP meeting |
+| `create_case` | Log a new case with issue type, agency, urgency, and volunteer name |
+| `attach_letter` | Store the full text of a drafted appeal letter against its case |
+| `update_case_status` | Mark a case as replied / resolved / escalated when agency responds |
+| `get_pending_cases` | List all open cases with no reply after N days (default 21) |
+| `get_todays_queue` | Show tonight's MPS case list sorted by urgency |
 
 ### Wire into NanoClaw
 
-`nanoclaw.yaml` at the project root wires the CRM bridge into both agent groups. The key section:
-
 ```yaml
+# nanoclaw.yaml
 mcp_servers:
   crm-bridge:
     type: stdio
@@ -206,58 +272,16 @@ mcp_servers:
 
 groups:
   main:
-    role: owner              # MP's personal channel
+    role: owner
     mcp_servers: [crm-bridge]
   mps-volunteers:
-    role: member             # Intake volunteers
+    role: member
     mcp_servers: [crm-bridge]
   mps-vetters:
-    role: member             # Vetter review team — policy lookup only, no CRM
+    role: member
     claude_md: groups/mps-vetters/CLAUDE.md
-    mcp_servers: []          # No case creation or constituent lookup
+    mcp_servers: []          # No CRM access — policy lookup only
 ```
-
-See `nanoclaw-crm-wiring.yaml` for the full copy-paste wiring guide including Block 4 (vetters group), all 5 backend configurations, verification steps, and a complete annotated MPS session example.
-
-### MCP tools exposed to the agent
-
-| Tool | What the agent can do |
-|---|---|
-| `lookup_constituent` | Pull full profile + all past cases + letters before an MP meeting |
-| `create_case` | Log a new case with issue type, agency, urgency, and volunteer name |
-| `attach_letter` | Store the full text of a drafted appeal letter against its case |
-| `update_case_status` | Mark a case as replied / resolved / escalated when agency responds |
-| `get_pending_cases` | List all open cases with no reply after N days (default 21) |
-| `get_todays_queue` | Show tonight's MPS case list sorted by urgency |
-
-### How it fits into the MPS workflow
-
-```
-MP opens MPS session
-  → agent calls get_todays_queue()         — see tonight's cases
-  → constituent sits down
-  → agent calls lookup_constituent(nric)   — full history surfaces instantly
-  → agent triages issue, drafts letter
-  → agent calls create_case()              — case logged
-  → agent calls attach_letter()            — letter saved
-  → agency replies next week
-  → MP tells agent "HDB replied to case 47, resolved"
-  → agent calls update_case_status()       — record updated
-  → Monday briefing
-  → agent calls get_pending_cases(21)      — flags overdue cases
-```
-
-### Google Sheets setup (if using that backend)
-
-1. Create a Google Cloud project and enable the Sheets + Drive APIs
-2. Create a service account → download the JSON key
-3. Save the key to `~/nanoclaw/crm-data/gsheet-credentials.json`
-4. Create a blank Google Sheets spreadsheet
-5. Share it with the service account email (Editor access)
-6. Copy the spreadsheet ID from the URL into `CRM_GSHEET_ID`
-7. Set `CRM_BACKEND=google_sheets` in `.env`
-
-The server creates the `Cases`, `Constituents`, and `Letters` worksheets automatically on first run.
 
 ---
 
@@ -275,6 +299,7 @@ Constituent data is highly sensitive. Every security control is non-negotiable.
 | **Local-only embeddings** | nomic-embed-text runs in Ollama locally; no document content sent to cloud embedding APIs |
 | **Web UI binding** | Web UI binds to `127.0.0.1` only — not accessible from the network |
 | **Group name validation** | Group folder names strictly validated (alphanumeric, hyphens, underscores only) |
+| **Hermes boundary** | Constituent data never crosses to the Hermes skill engine — only anonymised patterns |
 
 > **On prompt injection:** This is an acknowledged open problem. The sender allowlist is the primary defence. Do not connect the agent to systems whose compromise would be severe.
 
@@ -297,7 +322,7 @@ docker ps
 
 # 4. Clone into Linux filesystem (not /mnt/c/ — 10-100x slower)
 cd ~
-git clone https://github.com/J-Dheeraj/MPS-AI-Agent nanoclaw
+git clone https://github.com/J-Dheeraj/MPS-AI-Agent-_nanoClaw nanoclaw
 cd nanoclaw
 
 # 5. Anthropic API key ready (sk-ant-...)
@@ -327,11 +352,9 @@ The installer:
 
 ### 1. Customise the agent identity
 
-Edit `groups/main/CLAUDE.md` — replace `[MP NAME]` and `[CONSTITUENCY]` with the MP's actual name and constituency before first use.
+Edit `groups/main/CLAUDE.md` — replace `[MP NAME]` and `[CONSTITUENCY]` with the MP's actual name and constituency.
 
 ### 2. Set your sender allowlist
-
-Edit `~/.config/nanoclaw/sender-allowlist.json`:
 
 ```json
 {
@@ -345,95 +368,43 @@ Edit `~/.config/nanoclaw/sender-allowlist.json`:
 }
 ```
 
-Replace `6591234567` with the MP's number in international format. Only this number can trigger the agent.
+Replace `6591234567` with the MP's number in international format.
 
 ### 3. Pair your channel
 
-**WhatsApp:**
 ```
-/add-whatsapp
+/add-whatsapp    → scan QR code in WhatsApp → Settings → Linked Devices
+/add-telegram    → create bot via @BotFather, paste token
 ```
-Scan the QR code: WhatsApp → Settings → Linked Devices → Link a Device.
 
-**Telegram:**
-```
-/add-telegram
-```
-Create a bot via `@BotFather`, paste the token when prompted.
-
-**Web UI:** Available immediately at `http://localhost:3080`.
+Web UI: available immediately at `http://localhost:3080`.
 
 ### 4. Set up local AI
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull nomic-embed-text
-# In the web UI: /add-ollama
+# In web UI: /add-ollama
 ```
-
-Voice transcription (whisper.cpp) is included in the container — no extra setup needed.
 
 ### 5. Build the policy knowledge base
 
-Follow `groups/main/singapore-knowledge-ingestion.md` — ingest Priority 1 (HDB) through Priority 10 (CDC/PA) in order.
+Follow `groups/main/singapore-knowledge-ingestion.md` — ingest Priority 1 → 10.
 
-```
-ingest this: https://www.hdb.gov.sg/buying-a-flat/flat-grant-and-loan-eligibility
-ingest this: https://www.msf.gov.sg/what-we-do/comcare
-ingest this: https://www.cpf.gov.sg/member/cpf-overview
-```
+### 6. Set up auto-update tasks
 
-### 6. Build historical policy depth (optional but recommended)
+Send each of the 10 task blocks from `singapore-auto-update-tasks.md` to the agent.
 
-Follow `groups/main/singapore-historical-policies.md` — ingest Tier 1 (legislation) through Tier 7 (Budget archives). This gives the agent the ability to explain why policies exist, not just what they are.
+### 7. Set up Hermes GEPA (companion repo)
 
-### 7. Set up auto-update tasks
-
-Follow `groups/main/singapore-auto-update-tasks.md` — send each of the 10 task blocks to the agent. Once set up, the agent monitors policy changes automatically and briefs you before every MPS session.
-
----
-
-## Using the agent
-
-### Live triage during MPS
-
-```
-Constituent: elderly lady, 72, husband passed away, can't afford hospital bill at SGH
+```bash
+cd ~
+git clone https://github.com/J-Dheeraj/MPS-AI-Agent-Hermes mps-hermes-agent
+mkdir -p ~/mps-hermes-agent/skills/auto
+chmod +x ~/nanoclaw/weekly-skill-update.sh
 ```
 
-The agent identifies MediFund and CHAS eligibility, recommends whether to refer to the hospital's medical social worker or write directly to MOH.
-
-### Pre-meeting briefing
-
-```
-brief me on [constituent name] before I meet them at 7pm
-```
-
-Retrieves everything in the knowledge graph about that person — case history, previous letters, pending replies, sensitivity flags.
-
-### Draft an appeal letter
-
-```
-draft a letter to HDB appealing for [name] who was rejected for a rental flat.
-Single mother, 2 kids, income $1,800/month.
-```
-
-Produces a ready-to-sign letter in the standard MPS format, citing the correct scheme and eligibility criteria.
-
-### Policy lookup
-
-```
-what is the income ceiling for CHAS blue card?
-what changed for CPF in 2026?
-what are the FAS criteria for MOE schools?
-why was the Ethnic Integration Policy introduced?
-```
-
-### Check scheduled tasks
-
-```
-/tasks
-```
+See [INTEGRATION.md](./INTEGRATION.md) for full setup.
 
 ---
 
@@ -462,6 +433,10 @@ ollama list | grep nomic-embed-text
 # 6. Web UI localhost only
 # From another machine: curl http://YOUR_PC_IP:3080
 # Expected: connection refused
+
+# 7. Hermes boundary — check feedback-log.md before each Sunday export
+grep -E '[STFG][0-9]{7}[A-Z]' groups/main/feedback-log.md
+# Expected: no output (no NRICs)
 ```
 
 ---
@@ -472,17 +447,20 @@ ollama list | grep nomic-embed-text
 nanoclaw/
 ├── groups/
 │   ├── main/
-│   │   ├── CLAUDE.md                         ← MP agent identity, roles, agency knowledge, letter format
+│   │   ├── CLAUDE.md                         ← MP agent identity, roles, agency knowledge
 │   │   ├── singapore-knowledge-ingestion.md  ← 60+ current policy URLs, priority 1–10
 │   │   ├── singapore-historical-policies.md  ← 70-year policy history, 9 tiers
-│   │   └── singapore-auto-update-tasks.md    ← 10 scheduled task blocks for auto-monitoring
+│   │   ├── singapore-auto-update-tasks.md    ← 10 scheduled monitoring task blocks
+│   │   └── feedback-log.md                   ← Anonymised GEPA correction patterns (weekly)
 │   └── mps-vetters/
-│       └── CLAUDE.md                         ← Vetter agent: 5-check review, PASS/FAIL verdicts, escalation flags
-├── mps-workflow-integration.md               ← 3-stage workflow, platform vs NanoClaw, Playwright roadmap
+│       └── CLAUDE.md                         ← Vetter: 5-check review, PASS/FAIL verdicts
+├── INTEGRATION.md                            ← Combined nanoClaw + Hermes workflow
+├── weekly-skill-update.sh                    ← Weekly GEPA pipeline (export → evolve → apply)
+├── mps-workflow-integration.md               ← 3-stage MPS workflow, platform comparison
 ├── mcp-crm-server.py                         ← CRM Bridge MCP server (5 backends)
-├── nanoclaw-crm-wiring.yaml                  ← Copy-paste wiring guide (4 blocks: main, volunteers, vetters)
+├── nanoclaw-crm-wiring.yaml                  ← Copy-paste wiring guide (4 blocks)
 ├── requirements-crm.txt                      ← Python deps for CRM bridge
-├── nanoclaw.yaml                             ← Full config: 3 groups, MCP wired to main + volunteers
+├── nanoclaw.yaml                             ← Full config: 3 groups, MCP wired
 ├── src/
 │   ├── index.ts                   # Host process orchestrator
 │   ├── router/index.ts            # Message routing + sender validation
@@ -508,7 +486,6 @@ nanoclaw/
 │           ├── ingest.ts          # URL / document ingestion
 │           └── search.ts          # Semantic search
 ├── public/index.html              # Web chat UI
-├── config/examples/               # Example security config files
 ├── nanoclaw.sh                    # Installer
 ├── start-nanoclaw.sh              # Manual start (no systemd)
 └── .env.example
@@ -520,25 +497,28 @@ nanoclaw/
 
 1. **Constituent confidentiality is paramount.** The sender allowlist must be configured before pairing any channel. Default mode is `drop` — all unknown senders are silently ignored and not stored.
 
-2. **Policy accuracy.** Singapore policies change with each Budget (February) and Committee of Supply (March). The agent flags when information may be outdated, but always verify with the agency before sending a letter under the MP's name.
+2. **Hermes boundary.** Only anonymised correction patterns leave nanoClaw for the Hermes GEPA engine. The `weekly-skill-update.sh` script includes a PII scan and requires manual confirmation before any export.
 
-3. **Prompt injection is not solved.** Rate limits and the sender allowlist reduce the blast radius but do not eliminate the risk. Do not connect the agent to external systems whose compromise would be severe.
+3. **Policy accuracy.** Singapore policies change at Budget (February) and COS (March). The auto-update tasks keep the knowledge base current, but verify with the agency before sending a letter under the MP's name.
 
-4. **WhatsApp ToS.** Baileys uses the WhatsApp Web protocol, which is against WhatsApp's ToS for automated use. This is for personal/professional use only.
+4. **Prompt injection is not solved.** Rate limits and the sender allowlist reduce the blast radius but do not eliminate the risk. Do not connect the agent to external systems whose compromise would be severe.
 
-5. **API costs.** Monitor usage at [console.anthropic.com/usage](https://console.anthropic.com/usage). Set a spending limit before going live.
+5. **WhatsApp ToS.** Baileys uses the WhatsApp Web protocol, which is against WhatsApp's ToS for automated use. This is for personal/professional use only.
+
+6. **API costs.** Monitor usage at [console.anthropic.com/usage](https://console.anthropic.com/usage). Set a spending limit before going live.
 
 ---
 
 ## References
 
+- [MPS-AI-Agent-Hermes](https://github.com/J-Dheeraj/MPS-AI-Agent-Hermes) — companion GEPA skill engine
+- [INTEGRATION.md](./INTEGRATION.md) — combined system workflow and security boundary
 - [Anthropic Console](https://console.anthropic.com)
 - [OneCLI Agent Vault](https://github.com/onecli/onecli)
 - [NanoClaw platform](https://github.com/nanocoai/nanoclaw)
 - [HDB](https://www.hdb.gov.sg) · [CPF](https://www.cpf.gov.sg) · [MOM](https://www.mom.gov.sg) · [MOH](https://www.moh.gov.sg) · [MSF](https://www.msf.gov.sg) · [ICA](https://www.ica.gov.sg) · [IRAS](https://www.iras.gov.sg) · [LTA](https://www.lta.gov.sg) · [MOE](https://www.moe.gov.sg)
 - [Singapore Budget Archive](https://singaporebudget.gov.sg)
 - [Singapore Parliament Hansard](https://sprs.parl.gov.sg/search/)
-- [Pair Search](https://search.pair.gov.sg)
 - [SupportGoWhere](https://supportgowhere.life.gov.sg)
 
 ---
