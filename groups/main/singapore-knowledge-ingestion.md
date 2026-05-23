@@ -78,7 +78,7 @@ Second most frequent. Covers urgent and chronic hardship cases.
 
 ### Short-to-Medium Term Assistance
 
-- https://ask.gov.sg/msf?topic=ComCare&subtopic=Short-to-Medium-Term+Assistance
+- https://www.msf.gov.sg/what-we-do/comcare/comcare-short-to-medium-term-assistance
 
 ### Silver Support Scheme
 
@@ -171,9 +171,15 @@ Retirement, MediSave, and housing CPF questions are constant at MPS.
 
 - https://www.moh.gov.sg/healthcare-schemes-subsidies/subsidies-for-government-hospitals
 
+### Agency for Integrated Care (AIC) — CHAS and eldercare
+
+- https://www.aic.sg/
+- https://www.aic.sg/financial-assistance/chas
+
 ### 2026 healthcare updates
 
-- https://www.moh.gov.sg/newsroom/cpf-interest-rates-from-1-january-to-31-march-2026-and-basic-healthcare-sum-for-2026/
+- https://www.moh.gov.sg/news-highlights
+- https://www.moh.gov.sg/cos2026
 
 ---
 
@@ -233,6 +239,10 @@ Retirement, MediSave, and housing CPF questions are constant at MPS.
 
 - https://www.ica.gov.sg/reside/DP
 
+### Re-Entry Permit (REP)
+
+- https://www.ica.gov.sg/reside/PR/renew-rep
+
 ### Appeals and special cases
 
 - https://www.ica.gov.sg/reside/PR/appeal
@@ -263,7 +273,7 @@ Retirement, MediSave, and housing CPF questions are constant at MPS.
 
 ### Senior Employment Credit (SEC)
 
-- https://www.iras.gov.sg/schemes/disbursement-schemes/senior-employment-credit-(sec)-cpf-transition-offset-(cto)-and-enabling-employment-credit-(eec)
+- https://www.iras.gov.sg/schemes/disbursement-schemes/senior-employment-credit
 
 ---
 
@@ -296,10 +306,12 @@ Retirement, MediSave, and housing CPF questions are constant at MPS.
 ### Disabled persons schemes
 
 - https://www.lta.gov.sg/content/ltagov/en/getting_around/public_transport/concession_cards_and_passes/persons_with_disabilities.html
+- ⚠️ If above URL fails (old LTA path structure), use: https://www.ptc.gov.sg/fare-regulation/bus-rail/concession-passes-and-schemes
 
 ### Senior citizen travel concession
 
 - https://www.lta.gov.sg/content/ltagov/en/getting_around/public_transport/concession_cards_and_passes/senior_citizen.html
+- ⚠️ If above URL fails (old LTA path structure), use: https://www.ptc.gov.sg/fare-regulation/bus-rail/concession-passes-and-schemes
 
 ---
 
@@ -321,11 +333,15 @@ Retirement, MediSave, and housing CPF questions are constant at MPS.
 
 ## ADDITIONAL — Budget 2025 and COS 2026 (policy updates)
 
+### Budget 2026 full statement ⭐ ingest this first — most current
+
+- https://www.singaporebudget.gov.sg/budget_2026/budget-statement
+
 ### Budget 2025 full statement
 
 - https://www.singaporebudget.gov.sg/budget_2025/budget-statement
 
-### MOF Budget 2025 highlights
+### MOF Budget highlights
 
 - https://www.mof.gov.sg/singaporebudget
 

@@ -74,7 +74,7 @@ Maintain awareness of:
 - Enhanced CPF Housing Grant (EHG): up to $80,000 (families), $40,000 (singles); income ceiling $9,000/month (families), $4,500 (singles)
 - Proximity Housing Grant (PHG): up to $30,000 (families), $15,000 (singles)
 - Step-Up CPF Housing Grant: $15,000 for second-timer families in 2-room Flexi
-- Fresh Start Housing Scheme: eligible first-timer families in rental flats can now buy 2-room Flexi or 3-room on shorter leases (from 2026)
+- Fresh Start Housing Scheme: originally for second-timer families with children currently living in HDB rental flats; expanded in 2026 to include additional categories; eligible families can buy 2-room Flexi or 3-room on shorter leases — ⚠️ verify current criteria at hdb.gov.sg before advising
 - HDB Flat Eligibility (HFE) letter: mandatory first step for any flat purchase
 - Income ceiling for new flats: $14,000/month (families), $7,000 (singles)
 
@@ -95,9 +95,11 @@ Maintain awareness of:
 - Matched Retirement Savings Scheme (MRSS) expanded to Singaporeans with disabilities of all ages
 - MediSave annual withdrawal limit for outpatient scans doubled to $600
 
-**Account types:** Ordinary Account (OA), Special Account (SA), MediSave Account (MA), Retirement Account (RA — formed at 55)
+**Account types:** Ordinary Account (OA), Special Account (SA — closed at age 55, see below), MediSave Account (MA), Retirement Account (RA — formed at 55)
 
-**Withdrawal rules:** Full withdrawal at 55 only after setting aside the Full Retirement Sum (FRS) or Basic Retirement Sum (BRS) with property pledge.
+**SA closure at 55 (from January 2025):** When a member turns 55, the Special Account is closed. SA funds up to the FRS transfer to RA; any excess transfers to OA. Members below 55 continue to contribute to SA normally.
+
+**Withdrawal rules:** Full withdrawal at 55 only after setting aside the Full Retirement Sum (FRS) or Basic Retirement Sum (BRS) with property pledge. Enhanced Retirement Sum (ERS) = 4× BRS (from Jan 2025) — voluntary top-up for higher CPF LIFE payout.
 
 **Appeal process:** CPF appeals submitted via MP's letter. CPF Board responds within 3–4 weeks. Medical-related MediSave appeals often require supporting documents from the hospital.
 
@@ -112,7 +114,7 @@ Maintain awareness of:
 - Employment Pass (EP): min. $5,600/month (from Sep 2025); COMPASS framework
 - S Pass: min. $3,150/month; subject to quota
 - Work Permit (WP): construction, marine, process, services sectors
-- Dependant's Pass (DP): for EP/S Pass holders' spouses and children
+- Dependant's Pass (DP): for EP holders' spouses and children; S Pass holders can only sponsor DP if earning ≥$6,000/month
 - Long-Term Visit Pass (LTVP/LTVP+): for foreign spouses of citizens/PRs
 - Letter of Consent (LOC): allows LTVP holders to work
 
@@ -137,7 +139,7 @@ Maintain awareness of:
 - MediFund: safety net for those who cannot afford hospital bills after MediShield Life and Medisave; means-tested; applied through hospital medical social worker
 - CareShield Life: mandatory long-term disability insurance from age 30
 - ElderShield: older long-term care scheme (pre-CareShield Life)
-- Pioneer Generation Package / Merdeka Generation Package: additional healthcare subsidies for older Singaporeans born before 1950 / 1959
+- Pioneer Generation Package (PGP) / Merdeka Generation Package (MGP): additional healthcare subsidies — PGP for Singaporeans born on or before 31 Dec 1949; MGP for those born 1950–1959 (and became citizens/PRs by 31 Dec 1996)
 - CHAS GP subsidy: varies by card type and condition
 
 **Key 2026 updates:**
@@ -303,7 +305,7 @@ Member of Parliament for [CONSTITUENCY]
 | "Neighbour very noisy / littering" | HDB / Town Council |
 | "No transport subsidy as senior" | LTA |
 | "CHAS card not working" | MOH / AIC |
-| "Silver Support not received" | MSF / CPF |
+| "Silver Support not received" | MSF / SSO |
 | "CDC vouchers not received" | CDC / PA |
 | "Urgent — family crisis / no food today" | MSF Crisis / SSO |
 

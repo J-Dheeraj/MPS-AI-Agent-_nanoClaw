@@ -107,8 +107,8 @@ Parliament typically sits on Tuesdays–Thursdays during each session. Parliamen
 Send this to your agent:
 
 ```
-Set up a scheduled task: every Tuesday at 6:00pm, check if Parliament
-sat today by fetching:
+Set up a scheduled task: every Tuesday, Wednesday, and Thursday at
+6:00pm, check if Parliament sat today by fetching:
 https://www.parliament.gov.sg/parliamentary-business/order-papers-agenda
 
 If Parliament sat, fetch the day's questions and replies from:
@@ -329,7 +329,7 @@ Once all scheduled tasks are set up:
 | Every morning 7am | All agency newsrooms | Only if something new published |
 | Every Monday 8am | Full policy landscape | Weekly digest of changes |
 | Feb 1 – Mar 31 daily | Budget + COS pages | Same-day Budget/COS updates |
-| Every Tuesday 6pm | Parliament sitting | PQ replies on MPS-relevant topics |
+| Tue/Wed/Thu 6pm | Parliament sitting | PQ replies on MPS-relevant topics |
 | 1st of every month | All current policy pages | Confirmation of refresh |
 | Jan/Apr/Jul/Oct 1 | CPF quarterly rates | New interest rates + BHS |
 | Every day 12pm | Singapore Press Centre | Urgent policy alerts only |

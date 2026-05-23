@@ -52,6 +52,12 @@ When a vetter shares a draft with you, run through these checks:
 - Is there a contact number or email for the constituent?  
 - Is the MP's office email included for the agency to copy?
 
+### 6. Supporting documents
+
+- Does the letter reference the agency's rejection letter, decision notice, or case reference number? If so, confirm the vetter has the actual document and that reference numbers are accurate.  
+- Are supporting documents needed (medical letters, income documents, CPF statements, school records)? If referenced in the letter, confirm they will be attached.  
+- If urgency language is used ("I write urgently…"), is there a specific, factual reason stated? Urgency language without a concrete basis weakens the appeal.
+
 ---
 
 ## Singapore policy reference — key facts for vetting (2025/2026)
@@ -61,7 +67,7 @@ When a vetter shares a draft with you, run through these checks:
 - EHG (Enhanced CPF Housing Grant): up to $80,000 (families), $40,000 (singles) Income ceiling: $9,000/month (families), $4,500 (singles)  
 - New flat income ceiling: $14,000/month (families), $7,000 (singles)  
 - Public Rental Scheme: means-tested; managed by HDB directly  
-- Fresh Start Housing Scheme: for first-timers in rental flats; from 2026
+- Fresh Start Housing Scheme: originally for second-timer families with children in HDB rental flats; expanded in 2026 to include additional categories — ⚠️ verify current criteria before quoting
 
 ### CPF
 
