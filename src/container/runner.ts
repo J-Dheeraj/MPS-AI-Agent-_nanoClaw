@@ -17,6 +17,7 @@ import { validateMountPath } from '../security/mountAllowlist';
 import { validateGroupName } from '../security/groupNames';
 
 const GROUPS_DIR = path.join(process.env.HOME || '/root', 'nanoclaw', 'groups');
+<<<<<<< Updated upstream
 const ONECLI_PORT = parseInt(process.env.ONECLI_PORT || '4891');
 const DOCKER_NETWORK = 'nanoclaw-net';
 
@@ -29,6 +30,9 @@ function ensureDockerNetwork(): void {
     logger.info({ network: DOCKER_NETWORK }, 'Docker bridge network created');
   }
 }
+=======
+const ONECLI_PORT = parseInt(process.env.ONECLI_PORT || '10255');
+>>>>>>> Stashed changes
 
 export class ContainerRunner {
   private running = new Map<string, string>(); // groupId -> containerId
@@ -112,5 +116,33 @@ export class ContainerRunner {
       // Always release the startup lock
       this.starting.delete(groupId);
     }
+<<<<<<< Updated upstream
+=======
+
+    const containerName = `nanoclaw-agent-${groupId}`;
+
+    // Remove stopped container if exists
+    try { execSync(`docker rm -f ${containerName} 2>/dev/null`); } catch {}
+
+    const args = [
+      'run',
+      '--add-host', 'host.docker.internal:host-gateway', '-d',
+      '--name', containerName,
+      '--network', 'host',  // shares host network so OneCLI proxy is reachable
+      '--env', `ONECLI_PROXY=http://127.0.0.1:${ONECLI_PORT}`,
+      '--env', `GROUP_ID=${groupId}`,
+      '--env', `GROUP_DIR=/workspace/group`,
+      '--env', `HTTPS_PROXY=http://127.0.0.1:${ONECLI_PORT}`,
+      '--env', `HTTP_PROXY=http://127.0.0.1:${ONECLI_PORT}`,
+      '--env', 'ANTHROPIC_BASE_URL=https://api.anthropic.com',
+      '-v', `${groupDir}:/workspace/group`,
+      'nanoclaw-agent:latest',
+    ];
+
+    logger.info({ groupId, containerName }, 'Spawning agent container');
+    const result = execSync(`docker ${args.join(' ')}`).toString().trim();
+    this.running.set(groupId, result);
+    logger.info({ groupId, containerId: result }, 'Container started');
+>>>>>>> Stashed changes
   }
 }

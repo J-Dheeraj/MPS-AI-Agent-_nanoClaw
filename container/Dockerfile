@@ -1,26 +1,34 @@
-FROM oven/bun:1.1-alpine
+FROM node:20-bookworm
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apk add --no-cache \
+# Install build tools needed for better-sqlite3
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    sqlite3 \
+    libsqlite3-dev \
+    git \
     curl \
-    sqlite \
-    build-base \
-    git
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy and install container agent dependencies
-COPY container/agent/package.json container/agent/bun.lock* ./
-RUN bun install --frozen-lockfile 2>/dev/null || bun install
+# Copy agent package files
+COPY container/agent/package.json ./
 
-# Copy container agent source
+# Install dependencies using npm, not Bun
+RUN npm install
+
+# Install TypeScript runner for .ts entrypoint
+RUN npm install tsx
+
+# Rebuild better-sqlite3 inside Node 20 container
+RUN npm rebuild better-sqlite3 --build-from-source
+
+# Copy the agent source
 COPY container/agent/ ./
 
 # Create workspace mount point
 RUN mkdir -p /workspace/group
 
-# whisper.cpp binary — pulled separately by build.sh
-COPY container/bin/whisper-cpp* /usr/local/bin/ 2>/dev/null || true
-RUN chmod +x /usr/local/bin/whisper-cpp 2>/dev/null || true
-
-CMD ["bun", "run", "index.ts"]
+CMD ["npx", "tsx", "index.ts"]

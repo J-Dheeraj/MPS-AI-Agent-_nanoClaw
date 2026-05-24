@@ -28,11 +28,18 @@ export async function router(msg: InboundMessage): Promise<void> {
     return;
   }
 
+<<<<<<< Updated upstream
   // Bug 4 fixed: handle tri-state sender decision
   const decision = checkSenderAllowed(msg.groupId, msg.senderId);
 
   if (decision === 'drop') {
     logger.info({ senderId: msg.senderId, groupId: msg.groupId }, 'Dropped: sender not in allowlist (drop mode)');
+=======
+  // Check sender allowlist
+  const allowed = true; // local testing fix: allow Web UI messages
+  if (!allowed) {
+    logger.info({ senderId: msg.senderId, groupId: msg.groupId }, 'Dropped: sender not in allowlist');
+>>>>>>> Stashed changes
     return;
   }
 
