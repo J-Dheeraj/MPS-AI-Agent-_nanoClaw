@@ -1,0 +1,41 @@
+[package]
+name = "nanoclaw-client"
+version = "0.1.0"
+description = "nanoClaw MPS desktop client (Tauri rewrite of the GTK4 mps_client)"
+authors = ["MPS-AI-Agent"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Plugins needed to talk to mps_server and persist a session token:
+# - http: REST calls to FastAPI (auth, sessions, residents, cases, letters, feedback)
+# - websocket: streaming letter drafts from /letters/ws/draft and /letters/ws/qa
+# - store: small key/value store for the JWT + server URL (replaces api_client.py's
+#          hardcoded SERVER/WS_SERVER constants with a per-install setting)
+tauri-plugin-http = "2"
+tauri-plugin-websocket = "2"
+tauri-plugin-store = "2"
+
+# Lets the window remember size/position between launches -- nice on shared laptops
+tauri-plugin-window-state = "2"
+tauri-plugin-clipboard-manager = "2"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+# Keep the release binary small and fast -- the nanoClaw README's hard requirement
+# is ~50-80MB RAM on old Linux laptops, so release builds should be tuned for size.
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
