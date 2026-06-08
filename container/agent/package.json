@@ -3,11 +3,9 @@
   "version": "2.0.0",
   "module": "index.ts",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "better-sqlite3": "^9.4.3"
+    "openai": "^4.52.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.8",
     "bun-types": "latest"
   }
 }

@@ -99,7 +99,8 @@ export class ContainerRunner {
         '--env', `ONECLI_PROXY=http://host.docker.internal:${ONECLI_PORT}`,
         '--env', `GROUP_ID=${groupId}`,
         '--env', `GROUP_DIR=/workspace/group`,
-        '--env', `ANTHROPIC_BASE_URL=http://host.docker.internal:${ONECLI_PORT}`,
+        '--env', `OLLAMA_URL=http://ollama-container:11434`,
+        '--env', `OLLAMA_MODEL=${process.env.OLLAMA_MODEL || 'llama3.2:3b'}`,
         '-v', `${groupDir}:/workspace/group`,
         'nanoclaw-agent:latest',
       ];

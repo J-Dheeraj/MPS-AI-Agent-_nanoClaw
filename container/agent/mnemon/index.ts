@@ -4,15 +4,17 @@
 //
 // Bug 20 fixed: WAL journal mode enabled so the container agent (writer) and any
 //   external reader can access mnemon.db concurrently without SQLITE_BUSY errors.
+//
+// Bun fix: replaced better-sqlite3 (Node native addon) with bun:sqlite (built-in).
 
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 import path from 'path';
 
 const dbPath = path.join(process.env.GROUP_DIR || '/workspace/group', 'mnemon.db');
 const db = new Database(dbPath);
 
 // Bug 20: WAL mode for concurrent read/write access
-db.pragma('journal_mode = WAL');
+db.run('PRAGMA journal_mode = WAL');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS facts (
@@ -28,8 +30,6 @@ db.exec(`
     USING fts5(entity, predicate, value, content=facts, content_rowid=id);
 
   -- Bug 19: trigger to remove deleted facts from the FTS index.
-  -- FTS5 external content tables are not auto-synced on DELETE — stale rowid entries
-  -- cause searchFacts() JOINs to return incorrect or missing results.
   CREATE TRIGGER IF NOT EXISTS facts_fts_delete
     AFTER DELETE ON facts BEGIN
       INSERT INTO facts_fts(facts_fts, rowid, entity, predicate, value)
@@ -69,7 +69,7 @@ export const mnemon = {
         JOIN facts f ON f.id = facts_fts.rowid
         WHERE facts_fts MATCH ? LIMIT 10
       `).all(query) as any[];
-      return rows.map(r => `${r.entity} ${r.predicate}: ${r.value}`);
+      return rows.map((r: any) => `${r.entity} ${r.predicate}: ${r.value}`);
     } catch {
       return [];
     }

@@ -20,7 +20,7 @@ COPY container/agent/ ./
 RUN mkdir -p /workspace/group
 
 # whisper.cpp binary — pulled separately by build.sh
-COPY container/bin/whisper-cpp* /usr/local/bin/ 2>/dev/null || true
-RUN chmod +x /usr/local/bin/whisper-cpp 2>/dev/null || true
+COPY container/bin/whisper-cpp /usr/local/bin/whisper-cpp
+RUN chmod +x /usr/local/bin/whisper-cpp
 
 CMD ["bun", "run", "index.ts"]

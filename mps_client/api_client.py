@@ -109,7 +109,7 @@ async def get_resident_history(resident_id):
 async def get_my_cases():
     async with httpx.AsyncClient(timeout=8) as c:
         r = await c.get(f"{SERVER}/cases/mine", headers=_headers())
-    return r.json() if r.status_code == 200 else []
+    return r.json().get("cases", []) if r.status_code == 200 else []
 
 
 async def create_case(session_id, resident_id, case_type, agency,
@@ -212,7 +212,7 @@ async def stream_qa(question, on_chunk, on_done, on_error):
 async def get_vetter_queue():
     async with httpx.AsyncClient(timeout=8) as c:
         r = await c.get(f"{SERVER}/cases/queue", headers=_headers())
-    return r.json() if r.status_code == 200 else []
+    return r.json().get("cases", []) if r.status_code == 200 else []
 
 
 async def vetter_submit(case_id, final_content):
@@ -238,3 +238,39 @@ async def vetter_return(case_id, comment):
     if r.status_code != 200:
         raise APIError(r.status_code, r.json().get("detail", r.text))
     return r.json()
+
+async def signup(username: str, password: str, full_name: str) -> dict:
+    """Public registration — creates a volunteer account."""
+    async with httpx.AsyncClient(timeout=8) as c:
+        r = await c.post(
+            f"{SERVER}/auth/signup",
+            json={"username": username, "password": password, "full_name": full_name},
+        )
+        if r.status_code not in (200, 201):
+            detail = r.json().get("detail", r.text)
+            raise Exception(detail)
+        return r.json()
+
+
+async def change_password(current_password: str, new_password: str) -> dict:
+    async with httpx.AsyncClient(timeout=8) as c:
+        r = await c.put(
+            f"{SERVER}/auth/change-password",
+            json={"current_password": current_password, "new_password": new_password},
+            headers=_headers(),
+        )
+        if r.status_code != 200:
+            raise Exception(r.json().get("detail", r.text))
+        return r.json()
+
+
+async def change_username(current_password: str, new_username: str) -> dict:
+    async with httpx.AsyncClient(timeout=8) as c:
+        r = await c.put(
+            f"{SERVER}/auth/change-username",
+            json={"current_password": current_password, "new_username": new_username},
+            headers=_headers(),
+        )
+        if r.status_code != 200:
+            raise Exception(r.json().get("detail", r.text))
+        return r.json()

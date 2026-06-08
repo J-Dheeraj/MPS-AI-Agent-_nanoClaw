@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -105,9 +105,41 @@ async def health():
     return {"status": "ok", "service": "mps-server"}
 
 
-@app.get("/", tags=["health"])
+@app.get("/", tags=["health"], response_class=HTMLResponse)
 async def root():
-    return {"message": "MPS AI Agent server — use /docs for API reference"}
+    return HTMLResponse(content="""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MPS AI Agent</title>
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:640px;margin:60px auto;padding:0 20px;background:#f9f9f9;color:#222}
+    h1{font-size:1.6rem;margin-bottom:4px}
+    .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.75rem;background:#22c55e;color:#fff;vertical-align:middle;margin-left:8px}
+    p{color:#555;margin-top:0}
+    a.btn{display:inline-block;margin:8px 8px 8px 0;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:600;font-size:.95rem}
+    .primary{background:#2563eb;color:#fff}
+    .secondary{background:#e5e7eb;color:#111}
+    ul{color:#555;line-height:2}
+    code{background:#e5e7eb;padding:2px 6px;border-radius:4px;font-size:.9rem}
+  </style>
+</head>
+<body>
+  <h1>MPS AI Agent <span class="badge">&#x2713; running</span></h1>
+  <p>FastAPI backend &mdash; LAN only &mdash; Ollama on-premises</p>
+  <a class="btn primary" href="/docs">API Docs (Swagger)</a>
+  <a class="btn secondary" href="/redoc">ReDoc</a>
+  <a class="btn secondary" href="/health">Health check</a>
+  <hr style="margin:24px 0;border:none;border-top:1px solid #ddd">
+  <ul>
+    <li><code>POST /auth/login</code> &mdash; get JWT token</li>
+    <li><code>GET /cases/queue</code> &mdash; vetter queue</li>
+    <li><code>WS /letters/ws/draft</code> &mdash; streaming draft generation</li>
+    <li><code>GET /feedback/approved</code> &mdash; Hermes GEPA feed</li>
+  </ul>
+  <p style="font-size:.8rem;color:#aaa">Default admin: <code>admin / admin123</code> &mdash; change immediately</p>
+</body>
+</html>""")
 
 
 # ── Global error handler ──────────────────────────────────────────────────────
