@@ -121,7 +121,14 @@ app.include_router(feedback_router)
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health", tags=["health"])
 async def health():
-    return {"status": "ok", "service": "mps-server"}
+    from .services.ollama_client import llm_queue
+    ollama_ok = await llm_queue.health_check()
+    return {
+        "status": "ok",
+        "service": "mps-server",
+        "ollama": "up" if ollama_ok else "down",
+        "llm_queue_waiting": llm_queue.depth(),
+    }
 
 
 @app.get("/", tags=["health"], response_class=HTMLResponse)

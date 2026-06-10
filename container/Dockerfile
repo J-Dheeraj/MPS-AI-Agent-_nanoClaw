@@ -19,8 +19,12 @@ COPY container/agent/ ./
 # Create workspace mount point
 RUN mkdir -p /workspace/group
 
-# whisper.cpp binary — pulled separately by build.sh
-COPY container/bin/whisper-cpp /usr/local/bin/whisper-cpp
-RUN chmod +x /usr/local/bin/whisper-cpp
+# whisper.cpp binary (optional, on-device voice transcription).
+# The binary is NOT vendored in the repo. build.sh fetches it into
+# container/bin/ before `docker build`. We copy the whole directory so the
+# image builds whether or not the binary is present; if it is absent, voice
+# transcription is simply unavailable (text drafting is unaffected).
+COPY container/bin/ /usr/local/bin/
+RUN if [ -f /usr/local/bin/whisper-cpp ]; then chmod +x /usr/local/bin/whisper-cpp; fi
 
 CMD ["bun", "run", "index.ts"]

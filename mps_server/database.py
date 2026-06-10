@@ -121,6 +121,14 @@ class AuditLog(Base):
     prev_hash      = Column(String, nullable=True)
     entry_hash     = Column(String, nullable=True)
 
+class RevokedToken(Base):
+    """JWT denylist. A logged-out token's jti is stored here and rejected by
+    get_current_user until it would have expired anyway."""
+    __tablename__ = "revoked_tokens"
+    jti        = Column(String, primary_key=True)
+    revoked_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    user_id    = Column(String, nullable=True)
+
 def get_db():
     db = SessionLocal()
     try:

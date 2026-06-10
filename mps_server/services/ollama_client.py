@@ -1,68 +1,157 @@
 """
-Ollama client with LLM request queue
-Max 3 concurrent requests, priority tiers: urgent > normal > low
+Ollama client with a real priority-ordered LLM request queue.
+
+- MAX_CONCURRENT slots; waiters are admitted in priority order
+  (URGENT before NORMAL before LOW), FIFO within a priority.
+- MAX_QUEUE bound for load shedding: when too many requests are already
+  waiting, new ones are rejected immediately instead of piling up.
+- Ollama health check before dispatch; clear error if the model server
+  is unreachable, with a structured retry on transient connection errors.
+- Per-request timeout at the HTTP layer.
 """
 import asyncio
+import itertools
 import json
-import httpx
 import os
-from typing import AsyncGenerator
 from enum import IntEnum
+from typing import AsyncGenerator
 
-OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-MAX_CONCURRENT = 3
+import httpx
+
+OLLAMA_URL     = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "3"))
+MAX_QUEUE      = int(os.getenv("LLM_MAX_QUEUE", "20"))    # load-shedding bound
+REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
+CONNECT_RETRIES = int(os.getenv("LLM_CONNECT_RETRIES", "2"))
+
 
 class Priority(IntEnum):
     URGENT = 0   # eviction, medical, visa expiry
     NORMAL = 1   # standard draft requests
     LOW    = 2   # policy Q&A, background tasks
 
+
+class QueueFullError(Exception):
+    """Raised when the queue is at MAX_QUEUE and cannot accept more work."""
+
+
+class OllamaUnavailableError(Exception):
+    """Raised when the Ollama server cannot be reached."""
+
+
+class _PriorityGate:
+    """An async admission gate: at most MAX_CONCURRENT holders at once,
+    waiters admitted strictly in (priority, arrival) order."""
+
+    def __init__(self, slots: int, max_waiting: int):
+        self._slots = slots
+        self._in_flight = 0
+        self._max_waiting = max_waiting
+        self._waiting: list[tuple[int, int, asyncio.Future]] = []  # heap
+        self._counter = itertools.count()
+        self._lock = asyncio.Lock()
+
+    @property
+    def waiting(self) -> int:
+        return len(self._waiting)
+
+    @property
+    def in_flight(self) -> int:
+        return self._in_flight
+
+    async def acquire(self, priority: Priority) -> None:
+        import heapq
+        async with self._lock:
+            if self._in_flight < self._slots:
+                self._in_flight += 1
+                return
+            if len(self._waiting) >= self._max_waiting:
+                raise QueueFullError(
+                    f"LLM queue is full ({self._max_waiting} requests waiting). "
+                    "Please try again shortly."
+                )
+            fut = asyncio.get_event_loop().create_future()
+            heapq.heappush(self._waiting, (int(priority), next(self._counter), fut))
+        await fut  # parked until a slot frees and we are the highest priority
+
+    async def release(self) -> None:
+        import heapq
+        async with self._lock:
+            if self._waiting:
+                _, _, fut = heapq.heappop(self._waiting)
+                if not fut.done():
+                    fut.set_result(None)   # hand our slot to the next waiter
+                    return
+            self._in_flight = max(0, self._in_flight - 1)
+
+
 class LLMQueue:
     def __init__(self):
-        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-        self._queue_depth = 0
+        self._gate = _PriorityGate(MAX_CONCURRENT, MAX_QUEUE)
 
     def depth(self) -> int:
-        return self._queue_depth
+        """Number of requests currently waiting for a slot."""
+        return self._gate.waiting
+
+    async def health_check(self) -> bool:
+        """True if the Ollama server responds. Used before dispatch and by
+        the /health endpoint."""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{OLLAMA_URL}/api/tags")
+                return resp.status_code == 200
+        except Exception:
+            return False
 
     async def run(self, messages: list, priority: Priority = Priority.NORMAL,
                   stream: bool = True) -> AsyncGenerator[str, None]:
-        self._queue_depth += 1
+        await self._gate.acquire(priority)
         try:
-            async with self._semaphore:
-                self._queue_depth -= 1
-                async for chunk in self._call_ollama(messages, stream):
-                    yield chunk
-        except Exception:
-            self._queue_depth = max(0, self._queue_depth - 1)
-            raise
+            if not await self.health_check():
+                raise OllamaUnavailableError(
+                    f"Ollama is not reachable at {OLLAMA_URL}. "
+                    "Start it with `ollama serve` and ensure the model is pulled."
+                )
+            async for chunk in self._call_ollama(messages, stream):
+                yield chunk
+        finally:
+            await self._gate.release()
 
     async def _call_ollama(self, messages: list, stream: bool) -> AsyncGenerator[str, None]:
-        payload = {
-            "model":    OLLAMA_MODEL,
-            "messages": messages,
-            "stream":   stream,
-        }
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                f"{OLLAMA_URL}/api/chat",
-                json=payload,
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
-                    try:
-                        data = json.loads(line)
-                        content = data.get("message", {}).get("content", "")
-                        if content:
-                            yield content
-                        if data.get("done"):
-                            break
-                    except json.JSONDecodeError:
-                        continue
+        payload = {"model": OLLAMA_MODEL, "messages": messages, "stream": stream}
+        last_exc = None
+        for attempt in range(CONNECT_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                    async with client.stream(
+                        "POST", f"{OLLAMA_URL}/api/chat", json=payload,
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line.strip():
+                                continue
+                            try:
+                                data = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            content = data.get("message", {}).get("content", "")
+                            if content:
+                                yield content
+                            if data.get("done"):
+                                return
+                return
+            except (httpx.ConnectError, httpx.ReadTimeout) as e:
+                # Transient: retry a bounded number of times. Other errors
+                # (HTTP 4xx/5xx) are not retried — they will not self-heal.
+                last_exc = e
+                if attempt < CONNECT_RETRIES:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                raise OllamaUnavailableError(
+                    f"Ollama request failed after {CONNECT_RETRIES + 1} attempts: {e}"
+                ) from last_exc
+
 
 # Singleton queue instance
 llm_queue = LLMQueue()
@@ -104,6 +193,7 @@ If you are not certain, say so clearly — do not fabricate policy details.
 Always note if information may have changed and suggest verification with the agency.
 Keep answers concise and practical."""
 
+
 def build_draft_messages(case_type: str, agency: str, notes: str,
                           is_reappeal: bool = False,
                           previous_letter: str = None,
@@ -116,6 +206,7 @@ def build_draft_messages(case_type: str, agency: str, notes: str,
         user_content += f"\n\nRejection reason given by agency:\n{rejection_reason}"
     return [{"role": "system", "content": system},
             {"role": "user",   "content": user_content}]
+
 
 def build_qa_messages(question: str, context: str = None) -> list:
     user_content = question

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from ..database import User, get_db
-from ..auth import authenticate_user, create_token, hash_password, get_current_user, require_admin, TOKEN_EXPIRE_MINUTES
+from ..auth import authenticate_user, create_token, hash_password, get_current_user, require_admin, oauth2_scheme, TOKEN_EXPIRE_MINUTES
 from ..services.audit import log_event
 from pydantic import BaseModel
 
@@ -44,8 +44,20 @@ def login(
     )
 
 @router.post("/logout")
-def logout(request: Request, current_user: User = Depends(get_current_user),
+def logout(request: Request,
+           token: str = Depends(oauth2_scheme),
+           current_user: User = Depends(get_current_user),
            db: Session = Depends(get_db)):
+    # Revoke this token by storing its jti so it can no longer authenticate.
+    from ..auth import decode_token
+    from ..database import RevokedToken
+    try:
+        jti = decode_token(token).get("jti")
+        if jti and not db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
+            db.add(RevokedToken(jti=jti, user_id=current_user.id))
+            db.commit()
+    except Exception:
+        pass
     log_event(db, "logout", user_id=current_user.id, role=current_user.role,
               client_ip=request.client.host if request.client else None)
     return {"message": "Logged out"}
@@ -79,9 +91,12 @@ class SignupRequest(BaseModel):
 
 @router.post("/signup")
 def signup(req: SignupRequest, request: Request, db: Session = Depends(get_db)):
-    """Public self-registration — creates a volunteer account.
-    Role is always 'volunteer'; admins can promote later.
-    """
+    """Self-registration — DISABLED by default. MPS onboarding is done by an
+    admin via /auth/register. Set ALLOW_SIGNUP=1 only if a formal public
+    onboarding flow is genuinely required. Creates a volunteer account."""
+    import os as _os
+    if _os.getenv("ALLOW_SIGNUP", "").lower() not in ("1", "true", "yes"):
+        raise HTTPException(403, "Self-registration is disabled. Ask an admin to create your account.")
     username = req.username.strip().lower()
     if not username or len(username) < 3:
         raise HTTPException(400, "Username must be at least 3 characters")

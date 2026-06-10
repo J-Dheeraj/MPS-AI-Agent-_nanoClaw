@@ -112,3 +112,24 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/feedback/$F2/validate"
 
 echo "=============================="
 echo "PASS=$PASS FAIL=$FAIL"
+
+# ── Iteration-3 additions: signup gate, logout revocation, priority queue ────
+echo '--- extended checks ---'
+
+# 19. /auth/signup disabled by default -> 403
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/auth/signup -H 'Content-Type: application/json'   -d '{"username":"selfreg","password":"SelfPass#2026","full_name":"Self Reg"}')
+[ "$CODE" = "403" ] && ok "signup disabled -> 403" || bad "signup -> $CODE (want 403)"
+
+# 20. logout revokes the token: a call after logout -> 401
+VT2=$(curl -s -X POST $B/auth/login -d 'username=vol1&password=VolPass#2026' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))')
+H2="Authorization: Bearer $VT2"
+curl -s -o /dev/null -X POST $B/auth/logout -H "$H2"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' $B/cases/ -H "$H2")
+[ "$CODE" = "401" ] && ok "token revoked after logout -> 401" || bad "revoked token -> $CODE (want 401)"
+
+# 21. /health reports ollama + queue depth
+HJSON=$(curl -s $B/health)
+echo "$HJSON" | grep -q 'llm_queue_waiting' && ok "health reports queue depth" || bad "health missing queue depth"
+
+echo '=============================='
+echo "FINAL PASS=$PASS FAIL=$FAIL"
