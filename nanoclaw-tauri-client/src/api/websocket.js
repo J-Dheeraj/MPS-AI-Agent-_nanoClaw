@@ -12,11 +12,11 @@
 // side (consistent with the LAN-only scope in tauri.conf.json) while still
 // feeling like a normal JS WebSocket to the calling code.
 //
-// Expected message shape from the server (adjust to match the real
-// implementation in ollama_client.py if it differs once you read the code):
-//   { "type": "token",  "content": "..." }   -- one chunk of the streamed draft
-//   { "type": "done",   "letter_id": 123 }   -- generation finished, includes the saved id
-//   { "type": "error",  "message": "..." }   -- queue full (max 3 concurrent), Ollama error, etc.
+// Server protocol (mps_server/routers/letters_router.py):
+//   { "type": "chunk", "text": "..." }                    -- one streamed chunk
+//   { "type": "queue", "queue_position": N, "message" }   -- waiting in LLM queue
+//   { "type": "done",  "letter_id", "version", "text" }   -- generation finished
+//   { "type": "error", "text": "..." }                    -- auth/queue/Ollama error
 
 import WebSocket from "@tauri-apps/plugin-websocket";
 import { getServerConfig } from "./config";
@@ -34,7 +34,7 @@ import { getToken } from "./session";
  * @param {(message: string) => void} onError    -- called on any error (queue full, Ollama down, etc.)
  * @returns {Promise<() => void>} a `cancel` function that closes the socket early
  */
-export async function streamLetterDraft({ caseId, notes, kind = "LETTER" }, { onToken, onDone, onError }) {
+export async function streamLetterDraft({ caseId, notes, isReappeal = false, previousLetterId = null, rejectionReason = null }, { onToken, onDone, onError, onQueue }) {
   const { wsUrl } = await getServerConfig();
   const token = await getToken();
   if (!wsUrl) throw new Error("Server not configured.");
@@ -50,26 +50,32 @@ export async function streamLetterDraft({ caseId, notes, kind = "LETTER" }, { on
     const data = parseMessage(message);
     if (!data) return;
     switch (data.type) {
-      case "token":
-        onToken?.(data.content ?? "");
+      case "chunk":
+        onToken?.(data.text ?? "");
+        break;
+      case "queue":
+        onQueue?.(data.queue_position, data.message);
         break;
       case "done":
-        onDone?.(data.letter_id);
+        onDone?.(data.letter_id, data.version);
         socket.disconnect();
         break;
       case "error":
-        onError?.(data.message ?? "Unknown error from server");
+        onError?.(data.text ?? "Unknown error from server");
         socket.disconnect();
         break;
       default:
-        // Unrecognised message -- surface it for debugging rather than
-        // failing silently; the Ollama queue (max 3 concurrent per
-        // ollama_client.py) can emit status messages we may need to handle.
         console.debug("nanoclaw: unhandled draft-stream message", data);
     }
   });
 
-  await socket.send(JSON.stringify({ case_id: caseId, notes, kind }));
+  await socket.send(JSON.stringify({
+    case_id: caseId,
+    notes,
+    is_reappeal: isReappeal,
+    previous_letter_id: previousLetterId,
+    rejection_reason: rejectionReason,
+  }));
 
   return () => socket.disconnect();
 }
@@ -90,9 +96,9 @@ export async function streamPolicyQA({ question, agency }, { onToken, onDone, on
   socket.addListener((message) => {
     const data = parseMessage(message);
     if (!data) return;
-    if (data.type === "token") onToken?.(data.content ?? "");
+    if (data.type === "chunk") onToken?.(data.text ?? "");
     else if (data.type === "done") { onDone?.(); socket.disconnect(); }
-    else if (data.type === "error") { onError?.(data.message ?? "Unknown error"); socket.disconnect(); }
+    else if (data.type === "error") { onError?.(data.text ?? "Unknown error"); socket.disconnect(); }
   });
 
   await socket.send(JSON.stringify({ question, agency }));

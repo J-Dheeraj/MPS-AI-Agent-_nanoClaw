@@ -19,12 +19,14 @@ from typing import Optional
 router = APIRouter(prefix="/cases", tags=["cases"])
 
 class CaseCreateRequest(BaseModel):
-    session_id:     str
     resident_id:    str
     case_type:      str
     agency:         str
     urgency:        str = "normal"
+    session_id:     Optional[str] = None   # defaults to the active session
     is_new_issue:   bool = True
+    is_reappeal:    bool = False           # client convenience flag (inverse of is_new_issue)
+    notes:          Optional[str] = None   # volunteer's case notes
     parent_case_id: Optional[str] = None
 
 @router.get("/mine")
@@ -66,6 +68,24 @@ def vetter_queue(
     return {"session_id": session.id, "pending_count": len(cases),
             "cases": [_fmt(c) for c in cases]}
 
+@router.get("/")
+def list_cases(
+    db: DBSession = Depends(get_db),
+    current_user: User = Depends(require_volunteer),
+):
+    """Role-aware case list for the active session.
+    Volunteers see their own cases; vetters and admins see all."""
+    session = (db.query(Session)
+               .filter(Session.status.in_(["open", "active"]))
+               .order_by(Session.opened_at.desc()).first())
+    if not session:
+        return {"session_id": None, "cases": []}
+    q = db.query(Case).filter(Case.session_id == session.id)
+    if current_user.role == "volunteer":
+        q = q.filter(Case.volunteer_id == current_user.id)
+    cases = q.order_by(Case.urgency.desc(), Case.created_at.asc()).all()
+    return {"session_id": session.id, "cases": [_fmt(c) for c in cases]}
+
 @router.post("/")
 def create_case(
     req: CaseCreateRequest,
@@ -76,17 +96,23 @@ def create_case(
     resident = db.query(Resident).filter(Resident.id == req.resident_id).first()
     if not resident:
         raise HTTPException(404, "Resident not found")
-    session = db.query(Session).filter(Session.id == req.session_id).first()
+    if req.session_id:
+        session = db.query(Session).filter(Session.id == req.session_id).first()
+    else:
+        session = (db.query(Session)
+                   .filter(Session.status.in_(["open", "active"]))
+                   .order_by(Session.opened_at.desc()).first())
     if not session or session.status not in ("open", "active"):
         raise HTTPException(400, "No active session found")
 
     case = Case(
-        session_id=req.session_id,
+        session_id=session.id,
         resident_id=req.resident_id,
         case_type=req.case_type,
         agency=req.agency,
         urgency=req.urgency,
-        is_new_issue=req.is_new_issue,
+        is_new_issue=req.is_new_issue and not req.is_reappeal,
+        notes=req.notes,
         parent_case_id=req.parent_case_id,
         volunteer_id=current_user.id,
         status="assigned",
@@ -95,7 +121,7 @@ def create_case(
     session.total_cases = (session.total_cases or 0) + 1
     db.commit()
     log_event(db, "case_created", user_id=current_user.id, role=current_user.role,
-              session_id=req.session_id, case_id=case.id,
+              session_id=session.id, case_id=case.id,
               client_ip=request.client.host if request.client else None,
               details={"case_type": req.case_type, "agency": req.agency})
     return _fmt(case)
@@ -192,8 +218,10 @@ def _fmt(c: Case) -> dict:
     return {
         "id": c.id, "case_type": c.case_type, "agency": c.agency,
         "status": c.status, "urgency": c.urgency,
-        "is_new_issue": c.is_new_issue, "parent_case_id": c.parent_case_id,
+        "is_new_issue": c.is_new_issue, "is_reappeal": not c.is_new_issue,
+        "parent_case_id": c.parent_case_id,
         "resident_id": c.resident_id, "session_id": c.session_id,
+        "notes": c.notes,
         "resident": res,
         "vetter_comment": letter.vetter_comment if letter else None,
         # GTK4 client uses "letter_id"
@@ -201,3 +229,18 @@ def _fmt(c: Case) -> dict:
         "latest_letter_id": letter.id if letter else None,
         "letter_status": letter.status if letter else None,
     }
+
+
+@router.get("/{case_id}")
+def get_case(
+    case_id: str,
+    db: DBSession = Depends(get_db),
+    current_user: User = Depends(require_volunteer),
+):
+    """Case detail. Volunteers may only read their own cases."""
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(404, "Case not found")
+    if current_user.role == "volunteer" and case.volunteer_id != current_user.id:
+        raise HTTPException(403, "Not your case")
+    return _fmt(case)

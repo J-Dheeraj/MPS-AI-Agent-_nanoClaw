@@ -10,7 +10,7 @@
 // and it's the vetter's text the MP will see and may send under their name.
 // Always confirm before the irreversible "Submit to MP" action.
 
-import { vetterSubmitToMp, returnCaseToVolunteer, listCases } from "../api/client";
+import { vetterSubmitToMp, returnCaseToVolunteer, getVetterQueue } from "../api/client";
 
 export async function renderVetterQueue(container, { onOpenCase }) {
   container.innerHTML = "<div class='toolbar'><strong>Vetting queue</strong></div>";
@@ -19,7 +19,8 @@ export async function renderVetterQueue(container, { onOpenCase }) {
 
   let cases;
   try {
-    cases = await listCases({ status: "drafted" });
+    const payload = await getVetterQueue();
+    cases = payload?.cases ?? [];
   } catch (e) {
     list.innerHTML = `<div class="error-banner" style="margin:16px">Couldn't load queue: ${e.message ?? e}</div>`;
     return;

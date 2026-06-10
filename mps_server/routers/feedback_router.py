@@ -2,37 +2,39 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session as DBSession
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 
-from ..database import get_db, FeedbackEntry, Case, User
-from ..auth import get_current_user, require_volunteer, require_vetter
+from ..database import get_db, FeedbackEntry, User
+from ..auth import require_volunteer, require_vetter
 from ..services.audit import log_event
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
+VALID_AGENCIES = {"HDB", "CPF", "MSF", "MOH", "MOM", "ICA", "GENERAL"}
+
 # ── Schemas ──────────────────────────────────────────────────────────────────
+# Feedback is anonymised by design: corrections carry NO case reference, so an
+# exported correction can never be linked back to a resident or a letter.
 
 class FeedbackCreate(BaseModel):
-    case_id: int
-    agency_code: str          # HDB, CPF, MSF, MOH, MOM, ICA
-    incorrect_claim: str      # what the agent said that was wrong
-    correct_answer: str       # the correct information
-    session_id: Optional[int] = None
+    agency_code: str               # HDB, CPF, MSF, MOH, MOM, ICA, GENERAL
+    incorrect_claim: str           # what the agent said that was wrong
+    correct_answer: str            # the correct information
+    session_id: Optional[str] = None
 
 class FeedbackValidate(BaseModel):
-    action: str               # "approve" or "reject"
+    action: str                    # "approve" or "reject"
     reject_reason: Optional[str] = None
 
 class FeedbackOut(BaseModel):
-    id: int
-    session_id: Optional[int]
-    case_id: int
-    agency_code: str
+    id: str
+    session_id: Optional[str]
+    agency_code: Optional[str]
     incorrect_claim: str
     correct_answer: str
-    status: str               # pending, approved, rejected
-    logged_by: int
-    validated_by: Optional[int]
+    status: str                    # pending, approved, rejected
+    logged_by: str
+    validated_by: Optional[str]
     reject_reason: Optional[str]
     created_at: datetime
     validated_at: Optional[datetime]
@@ -50,22 +52,21 @@ async def log_feedback(
     current_user: User = Depends(require_volunteer),
 ):
     """
-    Volunteer or vetter logs a case where the LLM produced wrong information.
+    Volunteer or vetter logs a policy correction (the LLM said something wrong).
     Status starts as 'pending' — a vetter must validate before it reaches Hermes.
+    Corrections are anonymised: no case or resident reference is stored.
     """
-    # Resolve session_id from case if not provided
-    session_id = body.session_id
-    if session_id is None:
-        case = db.query(Case).filter(Case.id == body.case_id).first()
-        if case:
-            session_id = case.session_id
+    agency = body.agency_code.strip().upper()
+    if agency not in VALID_AGENCIES:
+        raise HTTPException(400, f"agency_code must be one of {sorted(VALID_AGENCIES)}")
+    if not body.incorrect_claim.strip() or not body.correct_answer.strip():
+        raise HTTPException(400, "incorrect_claim and correct_answer are required")
 
     entry = FeedbackEntry(
-        session_id=session_id,
-        case_id=body.case_id,
-        agency_code=body.agency_code.upper(),
-        incorrect_claim=body.incorrect_claim,
-        correct_answer=body.correct_answer,
+        session_id=body.session_id,
+        agency_code=agency,
+        incorrect_claim=body.incorrect_claim.strip(),
+        correct_answer=body.correct_answer.strip(),
         logged_by=current_user.id,
         status="pending",
     )
@@ -74,13 +75,12 @@ async def log_feedback(
 
     log_event(
         db,
-        event_type="FEEDBACK_LOGGED",
+        "FEEDBACK_LOGGED",
         user_id=current_user.id,
         role=current_user.role,
-        session_id=session_id,
-        case_id=body.case_id,
+        session_id=body.session_id,
         client_ip=request.client.host if request.client else None,
-        details=f"agency={body.agency_code} feedback_id={entry.id}",
+        details={"agency": agency, "feedback_id": entry.id},
     )
     db.commit()
     db.refresh(entry)
@@ -93,13 +93,12 @@ async def list_pending_feedback(
     current_user: User = Depends(require_vetter),
 ):
     """Vetter sees all feedback entries awaiting validation."""
-    entries = (
+    return (
         db.query(FeedbackEntry)
         .filter(FeedbackEntry.status == "pending")
         .order_by(FeedbackEntry.created_at.asc())
         .all()
     )
-    return entries
 
 
 @router.get("/approved", response_model=List[FeedbackOut])
@@ -109,20 +108,19 @@ async def list_approved_feedback(
 ):
     """
     Hermes GEPA reads approved feedback to improve SKILL files.
-    Only approved entries — no constituent data passes through.
+    Only approved, anonymised entries — no constituent data passes through.
     """
-    entries = (
+    return (
         db.query(FeedbackEntry)
         .filter(FeedbackEntry.status == "approved")
         .order_by(FeedbackEntry.validated_at.asc())
         .all()
     )
-    return entries
 
 
 @router.post("/{feedback_id}/validate", response_model=FeedbackOut)
 async def validate_feedback(
-    feedback_id: int,
+    feedback_id: str,
     body: FeedbackValidate,
     request: Request,
     db: DBSession = Depends(get_db),
@@ -131,7 +129,6 @@ async def validate_feedback(
     """
     Vetter approves or rejects a feedback entry.
     Only approved entries are forwarded to Hermes GEPA.
-    Rejected entries are archived with a reason.
     """
     if body.action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
@@ -144,7 +141,6 @@ async def validate_feedback(
             status_code=409,
             detail=f"Entry is already '{entry.status}' — cannot re-validate",
         )
-
     if body.action == "reject" and not body.reject_reason:
         raise HTTPException(
             status_code=422,
@@ -153,19 +149,18 @@ async def validate_feedback(
 
     entry.status = "approved" if body.action == "approve" else "rejected"
     entry.validated_by = current_user.id
-    entry.validated_at = datetime.utcnow()
+    entry.validated_at = datetime.now(timezone.utc)
     if body.reject_reason:
         entry.reject_reason = body.reject_reason
 
     log_event(
         db,
-        event_type=f"FEEDBACK_{entry.status.upper()}",
+        f"FEEDBACK_{entry.status.upper()}",
         user_id=current_user.id,
         role=current_user.role,
         session_id=entry.session_id,
-        case_id=entry.case_id,
         client_ip=request.client.host if request.client else None,
-        details=f"feedback_id={feedback_id} action={body.action}",
+        details={"feedback_id": feedback_id, "action": body.action},
     )
     db.commit()
     db.refresh(entry)
@@ -178,11 +173,10 @@ async def my_feedback(
     current_user: User = Depends(require_volunteer),
 ):
     """Returns feedback entries logged by the current user."""
-    entries = (
+    return (
         db.query(FeedbackEntry)
         .filter(FeedbackEntry.logged_by == current_user.id)
         .order_by(FeedbackEntry.created_at.desc())
         .limit(50)
         .all()
     )
-    return entries

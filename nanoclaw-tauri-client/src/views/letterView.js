@@ -66,7 +66,7 @@ export function renderLetterView(container, { caseRecord, onSubmitted }) {
 
     try {
       cancelStream = await streamLetterDraft(
-        { caseId: caseRecord.id, notes, kind: caseRecord.is_reappeal ? "REAPPEAL" : "LETTER" },
+        { caseId: caseRecord.id, notes, isReappeal: !!caseRecord.is_reappeal },
         {
           onToken: (chunk) => {
             draftBox.textContent += chunk;

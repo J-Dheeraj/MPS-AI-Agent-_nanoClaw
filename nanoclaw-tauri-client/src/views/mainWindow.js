@@ -78,7 +78,9 @@ async function ensureActiveSession(role) {
   if (role !== "volunteer") return;
   try {
     const active = await getActiveSession();
-    if (!active) {
+    // Server returns { session: null, message } when nothing is open,
+    // or a flat { id, date, status, ... } object when a session exists.
+    if (!active || !active.id) {
       // No open session for today -- silently open one so the volunteer
       // can start logging cases (mirrors the GTK client's startup check).
       const today = new Date().toISOString().slice(0, 10);
@@ -98,7 +100,8 @@ async function loadCases(shell) {
   const params = filter === "all" ? {} : { status: filter };
 
   try {
-    const cases = await listCases(params);
+    const payload = await listCases(params);
+    const cases = payload?.cases ?? [];
     setState({ cases });
     if (!cases.length) {
       list.innerHTML = `<p class="muted" style="padding:16px">No cases here yet.</p>`;
@@ -110,7 +113,7 @@ async function loadCases(shell) {
       row.className = "case-row" + (c.id === getState().selectedCaseId ? " selected" : "");
       row.innerHTML = `
         <strong>${c.case_type}</strong> <span class="badge ${c.status}">${c.status}</span>
-        <div class="muted" style="font-size:12px">${c.agency} • ${c.resident_name ?? "resident"} • ${c.urgency}${c.is_reappeal ? " • re-appeal" : ""}</div>
+        <div class="muted" style="font-size:12px">${c.agency} • ${c.resident?.name ?? "resident"} • ${c.urgency}${c.is_reappeal ? " • re-appeal" : ""}</div>
       `;
       row.addEventListener("click", () => setState({ selectedCaseId: c.id }));
       list.appendChild(row);

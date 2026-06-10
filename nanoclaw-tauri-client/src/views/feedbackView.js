@@ -92,7 +92,9 @@ async function loadPending(wrap) {
         await loadPending(wrap);
       });
       row.querySelector('[data-action="reject"]').addEventListener("click", async () => {
-        await validateFeedback(item.id, false);
+        const reason = prompt("Reason for rejecting this correction:");
+        if (!reason) return;
+        await validateFeedback(item.id, false, reason);
         await loadPending(wrap);
       });
       host.appendChild(row);

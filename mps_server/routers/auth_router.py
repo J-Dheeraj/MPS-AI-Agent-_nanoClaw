@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from ..database import User, get_db
-from ..auth import authenticate_user, create_token, hash_password, get_current_user, TOKEN_EXPIRE_MINUTES
+from ..auth import authenticate_user, create_token, hash_password, get_current_user, require_admin, TOKEN_EXPIRE_MINUTES
 from ..services.audit import log_event
 from pydantic import BaseModel
 
@@ -51,8 +51,12 @@ def logout(request: Request, current_user: User = Depends(get_current_user),
     return {"message": "Logged out"}
 
 @router.post("/register")
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    """Admin use only — create new user accounts."""
+def register(
+    req: RegisterRequest,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin only — create new user accounts (enforced by require_admin)."""
     if req.role not in ("volunteer", "vetter", "admin"):
         raise HTTPException(400, "Invalid role")
     existing = db.query(User).filter(User.username == req.username).first()

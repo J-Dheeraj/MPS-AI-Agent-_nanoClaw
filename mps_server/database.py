@@ -8,7 +8,12 @@ from sqlalchemy import (Boolean, Column, DateTime, ForeignKey,
     Integer, String, Text, create_engine)
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
-DATABASE_URL = "sqlite:///./mps.db"
+import os as _os
+import pathlib as _pathlib
+# DB lives next to this file (mps_server/mps.db) regardless of the cwd the
+# server was launched from. Override with DATABASE_URL for PostgreSQL etc.
+_default_db = _pathlib.Path(__file__).parent / "mps.db"
+DATABASE_URL = _os.environ.get("DATABASE_URL", f"sqlite:///{_default_db}")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -63,6 +68,7 @@ class Case(Base):
     parent_case_id = Column(String, ForeignKey("cases.id"), nullable=True)
     is_new_issue   = Column(Boolean, default=True)
     urgency        = Column(String, default="normal")
+    notes          = Column(Text, nullable=True)   # volunteer's case notes (never full NRIC)
     volunteer_id   = Column(String, ForeignKey("users.id"), nullable=True)
     created_at     = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     session  = relationship("Session", back_populates="cases")

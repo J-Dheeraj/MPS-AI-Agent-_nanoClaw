@@ -13,6 +13,9 @@ from typing import Optional
 
 router = APIRouter(prefix="/letters", tags=["letters"])
 
+class LetterUpdate(BaseModel):
+    content: str
+
 class DraftRequest(BaseModel):
     case_id:         str
     notes:           str
@@ -41,7 +44,7 @@ def get_letter(
 @router.put("/{letter_id}")
 def update_letter(
     letter_id: str,
-    content: str,
+    body: LetterUpdate,
     request: Request,
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_volunteer),
@@ -57,7 +60,7 @@ def update_letter(
     if letter.is_frozen:
         raise HTTPException(403, "Letter has been submitted to MP — cannot be edited")
     # Volunteers update draft_content; vetters update both (their edit becomes the final)
-    letter.draft_content = content
+    letter.draft_content = body.content
     db.commit()
     log_event(db, "letter_edited", user_id=current_user.id, role=current_user.role,
               letter_id=letter_id, letter_version=letter.version,

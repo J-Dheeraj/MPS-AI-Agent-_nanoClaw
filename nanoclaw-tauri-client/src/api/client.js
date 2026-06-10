@@ -3,9 +3,9 @@
 //
 // Endpoints mirrored from mps_server/routers/*:
 //   auth_router       -> /auth/login, /auth/logout, /auth/register
-//   sessions_router   -> /sessions/open, /sessions/close, /sessions/active
+//   sessions_router   -> /sessions/open, /sessions/{id}/close, /sessions/current
 //   residents_router  -> /residents/search, /residents (create, masked NRIC)
-//   cases_router      -> /cases (CRUD), /cases/{id}/submit, /cases/{id}/vetter-submit, /cases/{id}/return
+//   cases_router      -> /cases (CRUD), /cases/{id}/submit, /cases/{id}/vetter-submit, /cases/{id}/vetter-return
 //   letters_router    -> /letters (save/freeze) -- streaming lives in websocket.js
 //   feedback_router   -> /feedback (log), /feedback/approved, /feedback/{id}/validate
 //
@@ -93,7 +93,7 @@ export async function closeSession(sessionId) {
 }
 
 export async function getActiveSession() {
-  return request("/sessions/active");
+  return request("/sessions/current");
 }
 
 // ---- residents (NRIC always masked, e.g. S****567A) -----------------------
@@ -115,6 +115,11 @@ export async function listCases(params = {}) {
 
 export async function getCase(caseId) {
   return request(`/cases/${caseId}`);
+}
+
+/** Vetter-only: cases with status "drafted" awaiting review (server: GET /cases/queue) */
+export async function getVetterQueue() {
+  return request("/cases/queue");
 }
 
 export async function createCase({ resident_id, agency, case_type, urgency, is_reappeal, notes }) {
@@ -144,7 +149,7 @@ export async function vetterSubmitToMp(caseId, finalContent) {
 
 /** Vetter: send the case back to the volunteer with a comment for revision */
 export async function returnCaseToVolunteer(caseId, comment) {
-  return request(`/cases/${caseId}/return`, { method: "POST", body: { comment } });
+  return request(`/cases/${caseId}/vetter-return`, { method: "POST", body: { comment } });
 }
 
 // ---- letters (non-streaming operations; streaming is in websocket.js) -----
@@ -160,13 +165,20 @@ export async function getLetter(letterId) {
 // ---- feedback -> Hermes GEPA loop ------------------------------------------
 
 /** Volunteer/vetter logs a policy correction spotted during drafting */
-export async function logFeedback({ agency, incorrect_claim, correct_answer, case_id }) {
-  return request("/feedback", { method: "POST", body: { agency, incorrect_claim, correct_answer, case_id } });
+export async function logFeedback({ agency, incorrect_claim, correct_answer }) {
+  // Anonymised by design: corrections never carry a case reference.
+  return request("/feedback/", {
+    method: "POST",
+    body: { agency_code: agency, incorrect_claim, correct_answer },
+  });
 }
 
 /** Vetter validates a logged correction before it can reach Hermes */
 export async function validateFeedback(feedbackId, approved, note) {
-  return request(`/feedback/${feedbackId}/validate`, { method: "POST", body: { approved, note } });
+  return request(`/feedback/${feedbackId}/validate`, {
+    method: "POST",
+    body: { action: approved ? "approve" : "reject", reject_reason: note || undefined },
+  });
 }
 
 /** Vetter-only: view the queue of corrections awaiting validation */

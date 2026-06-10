@@ -2,6 +2,7 @@
 MPS Server - Authentication and RBAC
 JWT tokens, bcrypt password hashing, lockout after 5 failures
 """
+import pathlib
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -14,7 +15,28 @@ from sqlalchemy.orm import Session
 
 from .database import User, get_db
 
-SECRET_KEY  = "CHANGE_THIS_IN_PRODUCTION_USE_SECRETS_COMMAND"
+import os
+
+def _load_secret_key() -> str:
+    """SECRET_KEY must come from the environment (or mps_server/.env).
+    The server refuses to start without it - no hardcoded fallback."""
+    key = os.environ.get("SECRET_KEY")
+    if not key:
+        env_file = pathlib.Path(__file__).parent / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("SECRET_KEY="):
+                    key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+    if not key or key == "CHANGE_THIS_IN_PRODUCTION_USE_SECRETS_COMMAND":
+        raise RuntimeError(
+            "SECRET_KEY is not set. Run harden.sh to generate mps_server/.env, "
+            "or export SECRET_KEY before starting the server."
+        )
+    return key
+
+SECRET_KEY  = _load_secret_key()
 ALGORITHM   = "HS256"
 TOKEN_EXPIRE_MINUTES = 60
 

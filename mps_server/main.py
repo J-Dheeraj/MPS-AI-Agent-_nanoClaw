@@ -38,6 +38,16 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     log.info("Database tables verified / created")
 
+    # Lightweight migration: add cases.notes if the DB predates the column
+    # (create_all does not alter existing tables).
+    with engine.connect() as conn:
+        from sqlalchemy import text as _sql
+        cols = [row[1] for row in conn.execute(_sql("PRAGMA table_info(cases)"))]
+        if cols and "notes" not in cols:
+            conn.execute(_sql("ALTER TABLE cases ADD COLUMN notes TEXT"))
+            conn.commit()
+            log.info("Migrated: added cases.notes column")
+
     # Seed a default admin account if no users exist
     _seed_admin()
 
@@ -47,24 +57,33 @@ async def lifespan(app: FastAPI):
 
 
 def _seed_admin():
-    """Create admin/admin123 on first run so there is always a way in."""
+    """On first run, create an admin account with a RANDOM one-time password.
+    The password is printed to the server console exactly once - it is not
+    stored anywhere in plaintext. Change it after first login."""
+    import secrets
     from .auth import hash_password
     from .database import User
 
     db = SessionLocal()
     try:
         if db.query(User).count() == 0:
+            one_time_pw = secrets.token_urlsafe(12)
             admin = User(
                 username="admin",
-                hashed_pw=hash_password("admin123"),
+                hashed_pw=hash_password(one_time_pw),
                 role="admin",
                 full_name="System Admin",
                 is_active=True,
             )
             db.add(admin)
             db.commit()
-            log.warning(
-                "Seeded default admin account (username=admin password=admin123) — "                "CHANGE THIS IMMEDIATELY via /auth/register"            )
+            log.warning("=" * 60)
+            log.warning("FIRST RUN - admin account created")
+            log.warning("  username: admin")
+            log.warning("  password: %s", one_time_pw)
+            log.warning("This password is shown ONCE. Log in and change it")
+            log.warning("immediately via PUT /auth/change-password.")
+            log.warning("=" * 60)
     finally:
         db.close()
 
@@ -137,7 +156,7 @@ async def root():
     <li><code>WS /letters/ws/draft</code> &mdash; streaming draft generation</li>
     <li><code>GET /feedback/approved</code> &mdash; Hermes GEPA feed</li>
   </ul>
-  <p style="font-size:.8rem;color:#aaa">Default admin: <code>admin / admin123</code> &mdash; change immediately</p>
+
 </body>
 </html>""")
 

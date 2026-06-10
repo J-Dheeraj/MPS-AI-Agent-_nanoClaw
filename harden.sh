@@ -8,9 +8,15 @@ DB_FILE="$(dirname "$0")/mps_server/mps.db"
 
 echo '=== MPS Server Hardening ==='
 
-# 1. Generate a proper SECRET_KEY
+# 1. Generate a proper SECRET_KEY (create .env if it does not exist yet)
 NEW_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-sed -i "s|^SECRET_KEY=.*|SECRET_KEY=${NEW_KEY}|" "$ENV_FILE"
+if [ ! -f "$ENV_FILE" ]; then
+  printf 'SECRET_KEY=%s\nHOST=127.0.0.1\nPORT=8000\n' "$NEW_KEY" > "$ENV_FILE"
+elif grep -q '^SECRET_KEY=' "$ENV_FILE"; then
+  sed -i "s|^SECRET_KEY=.*|SECRET_KEY=${NEW_KEY}|" "$ENV_FILE"
+else
+  printf 'SECRET_KEY=%s\n' "$NEW_KEY" >> "$ENV_FILE"
+fi
 echo "[1/5] Generated new SECRET_KEY"
 
 # 2. Restrict .env permissions
@@ -26,12 +32,14 @@ else
 fi
 
 # 4. Restrict skill files (read-only for group)
-chmod -R 640 "$(dirname "$0")/groups/mps-volunteers/skills/" 2>/dev/null || true
+find "$(dirname "$0")/groups/mps-volunteers/skills/" -type d -exec chmod 750 {} + 2>/dev/null || true
+find "$(dirname "$0")/groups/mps-volunteers/skills/" -type f -exec chmod 640 {} + 2>/dev/null || true
 echo "[4/5] Skill files set to 640"
 
-# 5. Remind admin to change default password
-echo "[5/5] IMPORTANT: Change the default admin password!"
-echo "      Start the server, then POST to /auth/register to create your real accounts."
-echo "      The admin/admin123 account must be deleted or password changed."
+# 5. Remind admin about first-run credentials
+echo "[5/5] NOTE: On first start the server creates an 'admin' account with a"
+echo "      RANDOM one-time password printed to the server console. Log in with"
+echo "      it, change it via PUT /auth/change-password, then create real"
+echo "      accounts via POST /auth/register (admin only)."
 echo ''
 echo '=== Hardening complete ==='

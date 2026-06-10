@@ -71,18 +71,34 @@ def resident_history(
         "cases": [_serialize_case(c) for c in cases],
     }
 
+import re as _re
+from pydantic import BaseModel as _BM
+
+_MASKED_NRIC = _re.compile(r"^[STFGM]\*{4}\d{3}[A-Z]$")
+
+class ResidentCreate(_BM):
+    name: str
+    nric_masked: str
+    contact: Optional[str] = None
+
 @router.post("/")
 def create_resident(
-    name: str,
-    nric_masked: str,
-    contact: Optional[str] = None,
+    body: ResidentCreate,
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_volunteer),
 ):
-    """Register a new resident. NRIC must already be masked before calling."""
-    if len(nric_masked) < 4 or "*" not in nric_masked:
-        raise HTTPException(400, "NRIC must be masked (e.g. S****567A). Full NRIC is not accepted.")
-    r = Resident(name=name, nric_masked=nric_masked, contact=contact)
+    """Register a new resident. NRIC must already be masked before calling.
+    Strict format check: S****567A (first letter + 4 asterisks + last 3 digits + checksum letter).
+    A full NRIC is never accepted and never stored."""
+    nric = body.nric_masked.strip().upper()
+    if not _MASKED_NRIC.match(nric):
+        raise HTTPException(
+            400,
+            "NRIC must be masked in the form S****567A. Full NRIC is not accepted.",
+        )
+    if not body.name.strip():
+        raise HTTPException(400, "Name is required")
+    r = Resident(name=body.name.strip(), nric_masked=nric, contact=body.contact)
     db.add(r)
     db.commit()
     return {"id": r.id, "name": r.name, "nric_masked": r.nric_masked}
