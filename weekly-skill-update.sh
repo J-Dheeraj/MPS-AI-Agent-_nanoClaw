@@ -28,59 +28,23 @@ echo "  $(date '+%A, %d %B %Y')"
 echo "================================================="
 echo ""
 
-# ── Phase 1: Check feedback log exists and has content ──────────────────────
+# ── Phase 1-3: Structured, fail-closed export from the anonymised DB ─────────
+#
+# The export source is the FeedbackEntry table (status=approved), which carries
+# NO case or resident linkage. The exporter additionally runs every field
+# through a structured PII redactor (services/redaction.py) and ABORTS if any
+# PII remains — no free-text grep, no copying a markdown log. This replaces the
+# old grep-for-NRIC-only gate the review flagged.
 
-if [ ! -f "$FEEDBACK_LOG" ]; then
-  echo -e "${RED}ERROR: feedback-log.md not found at $FEEDBACK_LOG${NC}"
-  echo "Has any feedback been logged this week? Exiting."
+echo -e "${YELLOW}Exporting approved corrections (structured, fail-closed)...${NC}"
+
+cd "$NANOCLAW_DIR"
+if ! python3 -m mps_server.export_feedback "$FEEDBACK_INPUT"; then
+  echo -e "${RED}Export aborted (no approved feedback, or PII detected).${NC}"
+  echo "Resolve the entries listed above in the nanoClaw feedback queue, then re-run."
   exit 1
 fi
-
-ENTRY_COUNT=$(grep -c "^-" "$FEEDBACK_LOG" 2>/dev/null || echo 0)
-echo -e "${GREEN}✓${NC} Found feedback log with $ENTRY_COUNT entries"
-
-if [ "$ENTRY_COUNT" -lt 1 ]; then
-  echo -e "${YELLOW}WARN: No feedback entries found. Nothing to evolve. Exiting.${NC}"
-  exit 0
-fi
-
-# ── Phase 2: PII check — must pass before export ────────────────────────────
-
-echo ""
-echo -e "${YELLOW}SECURITY CHECK — Scanning feedback log for potential PII...${NC}"
-
-# Check for NRIC patterns (S/T/F/G followed by 7 digits and a letter)
-if grep -qiE '[STFG][0-9]{7}[A-Z]' "$FEEDBACK_LOG"; then
-  echo -e "${RED}ERROR: Possible NRIC detected in feedback log.${NC}"
-  echo "Remove all NRICs before exporting. Exiting."
-  exit 1
-fi
-
-# Check for phone number patterns (8-digit Singapore numbers)
-if grep -qE '\b[689][0-9]{7}\b' "$FEEDBACK_LOG"; then
-  echo -e "${RED}ERROR: Possible phone number detected in feedback log.${NC}"
-  echo "Remove all phone numbers before exporting. Exiting."
-  exit 1
-fi
-
-echo -e "${GREEN}✓${NC} No NRIC or phone number patterns detected"
-echo ""
-echo "--- MANUAL REVIEW REQUIRED ---"
-echo "Open $FEEDBACK_LOG and confirm:"
-echo "  1. No constituent names"
-echo "  2. No addresses"
-echo "  3. No case reference numbers traceable to individuals"
-echo "  4. Only anonymised policy corrections and patterns"
-echo ""
-echo "Press Enter when confirmed clean, Ctrl+C to abort."
-read -r
-
-# ── Phase 3: Export to Hermes ────────────────────────────────────────────────
-
-echo -e "${GREEN}✓${NC} Exporting anonymised patterns to Hermes..."
-
-cp "$FEEDBACK_LOG" "$FEEDBACK_INPUT"
-echo "# Exported: $DATE" >> "$FEEDBACK_INPUT"
+echo -e "${GREEN}✓${NC} Anonymised corrections exported to $FEEDBACK_INPUT"
 
 # ── Phase 4: Run GEPA evolution cycle ───────────────────────────────────────
 

@@ -164,11 +164,17 @@ async def draft_letter_ws(websocket: WebSocket, token: str, db: DBSession = Depe
         log_event(db, "letter_drafted", user_id=user.id, role=user.role,
                   case_id=case_id, letter_id=letter.id, letter_version=letter.version)
 
+        from ..services.validator import validate_letter
+        warnings = [
+            {"severity": w.severity, "code": w.code, "message": w.message}
+            for w in validate_letter(full_text)
+        ]
         await websocket.send_json({
             "type": "done",
             "letter_id": letter.id,
             "version": letter.version,
             "text": full_text,
+            "warnings": warnings,   # deterministic post-draft check
         })
     except WebSocketDisconnect:
         pass
