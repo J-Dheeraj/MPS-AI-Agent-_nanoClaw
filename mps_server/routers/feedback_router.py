@@ -1,48 +1,82 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy.orm import Session as DBSession
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime, timezone
+import os
+from datetime import date, datetime, timezone
+from typing import List, Optional
+from urllib.parse import urlparse
 
-from ..database import get_db, FeedbackEntry, User
-from ..auth import require_volunteer, require_vetter
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session as DBSession
+
+from ..auth import require_vetter, require_volunteer
+from ..database import FeedbackEntry, User, get_db
 from ..services.audit import log_event
+from ..services.redaction import scan
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 VALID_AGENCIES = {"HDB", "CPF", "MSF", "MOH", "MOM", "ICA", "GENERAL"}
+SOURCE_HOST_SUFFIXES = tuple(
+    suffix.strip().lower()
+    for suffix in os.getenv("POLICY_SOURCE_HOST_SUFFIXES", ".gov.sg").split(",")
+    if suffix.strip()
+)
 
-# ── Schemas ──────────────────────────────────────────────────────────────────
-# Feedback is anonymised by design: corrections carry NO case reference, so an
-# exported correction can never be linked back to a resident or a letter.
 
 class FeedbackCreate(BaseModel):
-    agency_code: str               # HDB, CPF, MSF, MOH, MOM, ICA, GENERAL
-    incorrect_claim: str           # what the agent said that was wrong
-    correct_answer: str            # the correct information
-    session_id: Optional[str] = None
+    agency_code: str
+    incorrect_claim: str = Field(min_length=1, max_length=4_000)
+    correct_answer: str = Field(min_length=1, max_length=4_000)
+
+    class Config:
+        extra = "forbid"
+
 
 class FeedbackValidate(BaseModel):
-    action: str                    # "approve" or "reject"
-    reject_reason: Optional[str] = None
+    action: str
+    reject_reason: Optional[str] = Field(default=None, max_length=2_000)
+    source_title: Optional[str] = Field(default=None, max_length=300)
+    source_url: Optional[str] = Field(default=None, max_length=2_000)
+    effective_date: Optional[str] = None
+
+    class Config:
+        extra = "forbid"
+
 
 class FeedbackOut(BaseModel):
     id: str
-    session_id: Optional[str]
     agency_code: Optional[str]
     incorrect_claim: str
     correct_answer: str
-    status: str                    # pending, approved, rejected
+    status: str
     logged_by: str
     validated_by: Optional[str]
     reject_reason: Optional[str]
+    source_title: Optional[str]
+    source_url: Optional[str]
+    effective_date: Optional[str]
     created_at: datetime
     validated_at: Optional[datetime]
 
     class Config:
         from_attributes = True
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+
+def _validate_source(source_title: str, source_url: str, effective_date: str) -> None:
+    if not source_title.strip():
+        raise HTTPException(422, "source_title is required for approval")
+    parsed = urlparse(source_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        raise HTTPException(422, "source_url must be an HTTPS URL")
+    if not any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in SOURCE_HOST_SUFFIXES):
+        raise HTTPException(422, "source_url host is not on the approved government allowlist")
+    try:
+        effective = date.fromisoformat(effective_date)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, "effective_date must use YYYY-MM-DD format") from exc
+    if effective.year < 2000 or effective.year > date.today().year + 2:
+        raise HTTPException(422, "effective_date is outside the accepted range")
+
 
 @router.post("/", response_model=FeedbackOut)
 async def log_feedback(
@@ -51,19 +85,22 @@ async def log_feedback(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_volunteer),
 ):
-    """
-    Volunteer or vetter logs a policy correction (the LLM said something wrong).
-    Status starts as 'pending' — a vetter must validate before it reaches Hermes.
-    Corrections are anonymised: no case or resident reference is stored.
-    """
     agency = body.agency_code.strip().upper()
     if agency not in VALID_AGENCIES:
         raise HTTPException(400, f"agency_code must be one of {sorted(VALID_AGENCIES)}")
-    if not body.incorrect_claim.strip() or not body.correct_answer.strip():
-        raise HTTPException(400, "incorrect_claim and correct_answer are required")
+
+    findings = scan(body.incorrect_claim) + scan(body.correct_answer)
+    if findings:
+        raise HTTPException(
+            422,
+            detail={
+                "message": "Feedback must contain policy information only, not personal data",
+                "finding_types": sorted({kind for kind, _ in findings}),
+            },
+        )
 
     entry = FeedbackEntry(
-        session_id=body.session_id,
+        session_id=None,
         agency_code=agency,
         incorrect_claim=body.incorrect_claim.strip(),
         correct_answer=body.correct_answer.strip(),
@@ -72,17 +109,14 @@ async def log_feedback(
     )
     db.add(entry)
     db.flush()
-
     log_event(
         db,
-        "FEEDBACK_LOGGED",
+        "feedback_logged",
         user_id=current_user.id,
         role=current_user.role,
-        session_id=body.session_id,
         client_ip=request.client.host if request.client else None,
         details={"agency": agency, "feedback_id": entry.id},
     )
-    db.commit()
     db.refresh(entry)
     return entry
 
@@ -92,7 +126,6 @@ async def list_pending_feedback(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_vetter),
 ):
-    """Vetter sees all feedback entries awaiting validation."""
     return (
         db.query(FeedbackEntry)
         .filter(FeedbackEntry.status == "pending")
@@ -106,10 +139,6 @@ async def list_approved_feedback(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_vetter),
 ):
-    """
-    Hermes GEPA reads approved feedback to improve SKILL files.
-    Only approved, anonymised entries — no constituent data passes through.
-    """
     return (
         db.query(FeedbackEntry)
         .filter(FeedbackEntry.status == "approved")
@@ -126,43 +155,40 @@ async def validate_feedback(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_vetter),
 ):
-    """
-    Vetter approves or rejects a feedback entry.
-    Only approved entries are forwarded to Hermes GEPA.
-    """
-    if body.action not in ("approve", "reject"):
-        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+    action = body.action.strip().lower()
+    if action not in {"approve", "reject"}:
+        raise HTTPException(400, "action must be approve or reject")
 
     entry = db.query(FeedbackEntry).filter(FeedbackEntry.id == feedback_id).first()
     if not entry:
-        raise HTTPException(status_code=404, detail="Feedback entry not found")
+        raise HTTPException(404, "Feedback entry not found")
     if entry.status != "pending":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Entry is already '{entry.status}' — cannot re-validate",
-        )
-    if body.action == "reject" and not body.reject_reason:
-        raise HTTPException(
-            status_code=422,
-            detail="reject_reason is required when rejecting feedback",
-        )
+        raise HTTPException(409, f"Entry is already {entry.status}")
+    if entry.logged_by == current_user.id:
+        raise HTTPException(409, "A second person must validate this correction")
 
-    entry.status = "approved" if body.action == "approve" else "rejected"
+    if action == "approve":
+        _validate_source(body.source_title or "", body.source_url or "", body.effective_date or "")
+        entry.status = "approved"
+        entry.source_title = body.source_title.strip()
+        entry.source_url = body.source_url.strip()
+        entry.effective_date = body.effective_date
+    else:
+        if not body.reject_reason or not body.reject_reason.strip():
+            raise HTTPException(422, "reject_reason is required when rejecting feedback")
+        entry.status = "rejected"
+        entry.reject_reason = body.reject_reason.strip()
+
     entry.validated_by = current_user.id
     entry.validated_at = datetime.now(timezone.utc)
-    if body.reject_reason:
-        entry.reject_reason = body.reject_reason
-
     log_event(
         db,
-        f"FEEDBACK_{entry.status.upper()}",
+        f"feedback_{entry.status}",
         user_id=current_user.id,
         role=current_user.role,
-        session_id=entry.session_id,
         client_ip=request.client.host if request.client else None,
-        details={"feedback_id": feedback_id, "action": body.action},
+        details={"feedback_id": feedback_id, "action": action},
     )
-    db.commit()
     db.refresh(entry)
     return entry
 
@@ -172,7 +198,6 @@ async def my_feedback(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_volunteer),
 ):
-    """Returns feedback entries logged by the current user."""
     return (
         db.query(FeedbackEntry)
         .filter(FeedbackEntry.logged_by == current_user.id)

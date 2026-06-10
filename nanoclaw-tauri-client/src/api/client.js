@@ -174,10 +174,16 @@ export async function logFeedback({ agency, incorrect_claim, correct_answer }) {
 }
 
 /** Vetter validates a logged correction before it can reach Hermes */
-export async function validateFeedback(feedbackId, approved, note) {
+export async function validateFeedback(feedbackId, approved, options = {}) {
   return request(`/feedback/${feedbackId}/validate`, {
     method: "POST",
-    body: { action: approved ? "approve" : "reject", reject_reason: note || undefined },
+    body: {
+      action: approved ? "approve" : "reject",
+      reject_reason: options.rejectReason || undefined,
+      source_title: options.sourceTitle || undefined,
+      source_url: options.sourceUrl || undefined,
+      effective_date: options.effectiveDate || undefined,
+    },
   });
 }
 

@@ -23,11 +23,11 @@ export async function renderLogin(container, { onLoggedIn }) {
   if (!baseUrl) {
     card.innerHTML = `
       <h1>Connect to server</h1>
-      <p>Enter the central server's address. An admin can find this on the server machine
-         (it's bound to the LAN, e.g. <code>192.168.1.50:8000</code>).</p>
+      <p>Enter the central server's HTTPS origin supplied by an administrator
+         (for example <code>https://mps-server.local</code>).</p>
       <div class="field">
         <label>Server address</label>
-        <input id="server-addr" placeholder="192.168.1.50:8000" />
+        <input id="server-addr" placeholder="https://mps-server.local" />
       </div>
       <div class="error-banner" id="login-error" style="display:none"></div>
       <button class="primary" id="server-save" style="width:100%">Continue</button>

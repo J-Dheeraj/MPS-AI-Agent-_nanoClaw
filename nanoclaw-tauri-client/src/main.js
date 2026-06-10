@@ -1,6 +1,5 @@
-// App entry point. Restores any persisted session (token held in the Rust
-// store plugin, never localStorage), then renders either the login screen
-// or the main window shell depending on auth state.
+// App entry point. Tokens are memory-only, so each application launch starts
+// signed out and renders the login screen.
 
 import "./style.css";
 import { restoreSession, isAuthenticated, onSessionChange } from "./api/session";

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from ..database import User, get_db
-from ..auth import authenticate_user, create_token, hash_password, get_current_user, require_admin, oauth2_scheme, TOKEN_EXPIRE_MINUTES
+from ..auth import authenticate_user, create_token, hash_password, get_current_user, require_admin, oauth2_scheme, TOKEN_EXPIRE_MINUTES, validate_password_strength
 from ..services.audit import log_event
 from pydantic import BaseModel
 
@@ -71,11 +71,17 @@ def register(
     """Admin only — create new user accounts (enforced by require_admin)."""
     if req.role not in ("volunteer", "vetter", "admin"):
         raise HTTPException(400, "Invalid role")
-    existing = db.query(User).filter(User.username == req.username).first()
+    username = req.username.strip().lower()
+    if len(username) < 3 or len(username) > 64:
+        raise HTTPException(422, "Username must be between 3 and 64 characters")
+    validate_password_strength(req.password, username)
+    if not req.full_name.strip() or len(req.full_name.strip()) > 200:
+        raise HTTPException(422, "Full name must be between 1 and 200 characters")
+    existing = db.query(User).filter(User.username == username).first()
     if existing:
         raise HTTPException(400, "Username already exists")
     user = User(
-        username=req.username,
+        username=username,
         hashed_pw=hash_password(req.password),
         full_name=req.full_name,
         role=req.role,
@@ -100,8 +106,7 @@ def signup(req: SignupRequest, request: Request, db: Session = Depends(get_db)):
     username = req.username.strip().lower()
     if not username or len(username) < 3:
         raise HTTPException(400, "Username must be at least 3 characters")
-    if not req.password or len(req.password) < 8:
-        raise HTTPException(400, "Password must be at least 8 characters")
+    validate_password_strength(req.password, username)
     if not req.full_name.strip():
         raise HTTPException(400, "Full name is required")
     existing = db.query(User).filter(User.username == username).first()
@@ -144,8 +149,7 @@ def change_password(
     from ..auth import verify_password
     if not verify_password(req.current_password, current_user.hashed_pw):
         raise HTTPException(400, "Current password is incorrect")
-    if len(req.new_password) < 8:
-        raise HTTPException(400, "New password must be at least 8 characters")
+    validate_password_strength(req.new_password, current_user.username)
     if req.new_password == req.current_password:
         raise HTTPException(400, "New password must differ from current password")
     current_user.hashed_pw = hash_password(req.new_password)

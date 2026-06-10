@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:8000 ws://127.0.0.1:8000 http://192.168.0.0/16 ws://192.168.0.0/16 ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; connect-src 'self' https: wss: http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:* ipc: http://ipc.localhost",
       "dangerousDisableAssetCspModification": false
     },
     "withGlobalTauri": false

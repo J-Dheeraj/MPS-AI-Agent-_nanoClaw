@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /mps_server
+    schedule: {interval: weekly}
+  - package-ecosystem: npm
+    directory: /nanoclaw-tauri-client
+    schedule: {interval: weekly}
+  - package-ecosystem: cargo
+    directory: /nanoclaw-tauri-client/src-tauri
+    schedule: {interval: weekly}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule: {interval: weekly}

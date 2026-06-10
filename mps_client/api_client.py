@@ -161,15 +161,13 @@ async def update_letter(letter_id, content):
 
 async def stream_draft(case_id, notes, is_reappeal, rejection_reason,
                        previous_letter_id, on_chunk, on_queue, on_done, on_error):
-    uri = f"{WS_SERVER}/letters/ws/draft?token={auth.token}"
+    uri = f"{WS_SERVER}/letters/ws/draft"
     try:
         async with websockets.connect(uri, ping_interval=20) as ws:
+            await ws.send(json.dumps({"type": "auth", "token": auth.token}))
             await ws.send(json.dumps({
                 "case_id": case_id,
-                "notes": notes,
                 "is_reappeal": is_reappeal,
-                "rejection_reason": rejection_reason,
-                "previous_letter_id": previous_letter_id,
             }))
             async for raw in ws:
                 msg = json.loads(raw)
@@ -189,9 +187,10 @@ async def stream_draft(case_id, notes, is_reappeal, rejection_reason,
 
 
 async def stream_qa(question, on_chunk, on_done, on_error):
-    uri = f"{WS_SERVER}/letters/ws/qa?token={auth.token}"
+    uri = f"{WS_SERVER}/letters/ws/qa"
     try:
         async with websockets.connect(uri, ping_interval=20) as ws:
+            await ws.send(json.dumps({"type": "auth", "token": auth.token}))
             await ws.send(json.dumps({"question": question}))
             async for raw in ws:
                 msg = json.loads(raw)

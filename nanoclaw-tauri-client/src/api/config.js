@@ -1,8 +1,8 @@
 // Server connection config -- replaces the hardcoded SERVER / WS_SERVER
 // constants that mps_client/api_client.py required editing per laptop:
 //
-//   SERVER    = "http://192.168.X.X:8000"
-//   WS_SERVER = "ws://192.168.X.X:8000"
+//   SERVER    = "https://mps-server.local"
+//   WS_SERVER = "wss://mps-server.local"
 //
 // Here it's a one-time "point this laptop at the server" step stored via
 // the Rust-side tauri-plugin-store (see src-tauri/src/main.rs), so admins
@@ -23,13 +23,29 @@ export async function getServerConfig() {
 }
 
 /**
- * Persist the server address. Accepts a host[:port] like "192.168.1.50:8000"
- * or a full URL, and derives both the http(s) and ws(s) forms from it.
+ * Persist the server origin. HTTPS is mandatory except on loopback for local
+ * development. Paths, query strings and embedded credentials are rejected.
  */
 export async function setServerAddress(hostAndPort) {
-  const trimmed = hostAndPort.trim().replace(/^https?:\/\//, "").replace(/^wss?:\/\//, "");
-  const baseUrl = `http://${trimmed}`;
-  const wsUrl = `ws://${trimmed}`;
+  const trimmed = hostAndPort.trim();
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  const parsed = new URL(candidate);
+  const isLoopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+
+  if (!['https:', 'http:'].includes(parsed.protocol)) {
+    throw new Error("Server address must use HTTPS.");
+  }
+  if (parsed.protocol === 'http:' && !isLoopback) {
+    throw new Error("HTTPS is required for non-local server connections.");
+  }
+  if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("Enter only the server origin, without credentials, paths or query parameters.");
+  }
+
+  const baseUrl = `${parsed.protocol}//${parsed.host}`;
+  const wsUrl = `${parsed.protocol === 'https:' ? 'wss:' : 'ws:'}//${parsed.host}`;
   await invoke("set_server_config", { config: { base_url: baseUrl, ws_url: wsUrl } });
   cached = { baseUrl, wsUrl };
 }

@@ -1,21 +1,9 @@
-"""
-Export approved feedback corrections to Hermes — structured, fail-closed.
+"""Export each approved feedback record once as a structured Hermes batch."""
 
-Replaces the old grep-over-free-text-markdown export. Source of truth is the
-anonymised FeedbackEntry table (status='approved'), which carries NO case or
-resident linkage. Every field is additionally passed through the structured
-redactor (services/redaction.py) as defence-in-depth.
-
-If any field still contains detectable PII after redaction, the export ABORTS
-(fail closed) and reports which entries are dirty — nothing is written.
-
-Usage:
-    python3 -m mps_server.export_feedback [output_path]
-Default output: ~/mps-hermes-agent/feedback-input.md
-Exit 0 = exported, 1 = aborted (PII found or nothing to export).
-"""
+import json
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,53 +16,95 @@ def export(output_path: str) -> int:
     try:
         rows = (
             db.query(FeedbackEntry)
-            .filter(FeedbackEntry.status == "approved")
+            .filter(
+                FeedbackEntry.status == "approved",
+                FeedbackEntry.exported_at.is_(None),
+            )
             .order_by(FeedbackEntry.validated_at.asc())
             .all()
         )
         if not rows:
-            print("Nothing to export: no approved feedback.")
+            print("Nothing to export: no newly approved feedback.")
             return 1
 
         dirty = []
-        lines = [
-            "# Hermes feedback input (anonymised policy corrections)",
-            f"# Exported: {datetime.now(timezone.utc).isoformat()}",
-            f"# Source: FeedbackEntry table, status=approved ({len(rows)} entries)",
-            "# Structure: agency | wrong | correct  — no case/resident linkage",
-            "",
-        ]
-        for r in rows:
-            # Defence-in-depth: these fields are policy text, but scan anyway.
+        entries = []
+        for row in rows:
             findings = (
-                scan(r.agency_code or "")
-                + scan(r.incorrect_claim or "")
-                + scan(r.correct_answer or "")
+                scan(row.agency_code or "")
+                + scan(row.incorrect_claim or "")
+                + scan(row.correct_answer or "")
+                + scan(row.source_title or "")
             )
             if findings:
-                dirty.append((r.id, [t for t, _ in findings]))
+                dirty.append((row.id, sorted({kind for kind, _ in findings})))
                 continue
-            lines.append(
-                f"- agency: {r.agency_code} | wrong: {r.incorrect_claim} | correct: {r.correct_answer}"
+            if not row.source_title or not row.source_url or not row.effective_date:
+                dirty.append((row.id, ["missing_source_metadata"]))
+                continue
+            entries.append(
+                {
+                    "feedback_id": row.id,
+                    "agency": row.agency_code,
+                    "incorrect_claim": row.incorrect_claim,
+                    "correct_answer": row.correct_answer,
+                    "source": {
+                        "title": row.source_title,
+                        "url": row.source_url,
+                        "effective_date": row.effective_date,
+                    },
+                    "validated_by": row.validated_by,
+                    "validated_at": row.validated_at.isoformat()
+                    if row.validated_at
+                    else None,
+                }
             )
 
         if dirty:
-            print("ABORT — PII detected in approved feedback (fail closed). "
-                  "Nothing was exported.")
-            for fid, types in dirty:
-                print(f"  feedback {fid}: {', '.join(sorted(set(types)))}")
-            print("Fix or reject these entries before re-running the export.")
+            print("ABORT: unsafe or incomplete approved feedback. Nothing was exported.")
+            for feedback_id, finding_types in dirty:
+                print(f"  feedback {feedback_id}: {', '.join(finding_types)}")
             return 1
 
-        out = Path(os.path.expanduser(output_path))
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text("\n".join(lines) + "\n")
-        print(f"Exported {len(rows)} anonymised corrections to {out}")
+        batch_id = str(uuid.uuid4())
+        exported_at = datetime.now(timezone.utc)
+        payload = {
+            "schema_version": 1,
+            "batch_id": batch_id,
+            "exported_at": exported_at.isoformat(),
+            "entries": entries,
+        }
+
+        output = Path(os.path.expanduser(output_path))
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_name(f".{output.name}.{batch_id}.tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        descriptor = os.open(temporary, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, output)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+
+        for row in rows:
+            row.exported_at = exported_at
+            row.export_batch_id = batch_id
+        db.commit()
+        print(f"Exported {len(entries)} corrections in batch {batch_id} to {output}")
         return 0
     finally:
         db.close()
 
 
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "~/mps-hermes-agent/feedback-input.md"
+    target = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "~/mps-hermes-agent/feedback-batch.json"
+    )
     sys.exit(export(target))

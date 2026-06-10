@@ -13,14 +13,15 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
-from .database import User, get_db
+from .database import RevokedToken, User, get_db
+from .config import read_secret
 
 import os
 
 def _load_secret_key() -> str:
     """SECRET_KEY must come from the environment (or mps_server/.env).
     The server refuses to start without it - no hardcoded fallback."""
-    key = os.environ.get("SECRET_KEY")
+    key = read_secret("SECRET_KEY")
     if not key:
         env_file = pathlib.Path(__file__).parent / ".env"
         if env_file.exists():
@@ -34,11 +35,15 @@ def _load_secret_key() -> str:
             "SECRET_KEY is not set. Run harden.sh to generate mps_server/.env, "
             "or export SECRET_KEY before starting the server."
         )
+    if len(key) < 32:
+        raise RuntimeError("SECRET_KEY must contain at least 32 characters")
     return key
 
 SECRET_KEY  = _load_secret_key()
 ALGORITHM   = "HS256"
-TOKEN_EXPIRE_MINUTES = 60
+TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "30"))
+TOKEN_ISSUER = os.getenv("TOKEN_ISSUER", "mps-server")
+TOKEN_AUDIENCE = os.getenv("TOKEN_AUDIENCE", "nanoclaw-client")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -53,25 +58,76 @@ def hash_password(password: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
+
+def validate_password_strength(password: str, username: str = "") -> None:
+    """Apply a length-first password policy suitable for local accounts."""
+    if len(password) < 12 or len(password) > 128:
+        raise HTTPException(422, detail="Password must be between 12 and 128 characters")
+    normalised = password.casefold()
+    if username and username.casefold() in normalised:
+        raise HTTPException(422, detail="Password must not contain the username")
+    if normalised in {
+        "password1234",
+        "administrator",
+        "changeme12345",
+        "qwertyuiop12",
+    }:
+        raise HTTPException(422, detail="Password is too common")
+
 # ── Token ─────────────────────────────────────
 
 def create_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
+    now = datetime.now(timezone.utc)
+    expire = now + (
         expires_delta or timedelta(minutes=TOKEN_EXPIRE_MINUTES)
     )
-    to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
+    to_encode.update({
+        "exp": expire,
+        "iat": now,
+        "nbf": now,
+        "iss": TOKEN_ISSUER,
+        "aud": TOKEN_AUDIENCE,
+        "jti": str(uuid.uuid4()),
+    })
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+            issuer=TOKEN_ISSUER,
+            audience=TOKEN_AUDIENCE,
+        )
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def resolve_user_from_token(token: str, db: Session) -> User:
+    """Resolve a token using the same checks for HTTP and WebSockets."""
+    payload = decode_token(token)
+    user_id: str = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(status_code=401, detail="Token is missing its identifier")
+    if db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    if payload.get("role") != user.role:
+        raise HTTPException(status_code=401, detail="Token role is stale")
+    return user
 
 # ── Login / lockout ───────────────────────────
 
@@ -106,19 +162,7 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    payload = decode_token(token)
-    user_id: str = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token payload")
-    jti = payload.get("jti")
-    if jti:
-        from .database import RevokedToken
-        if db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
-            raise HTTPException(status_code=401, detail="Token has been revoked (logged out)")
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
-    return user
+    return resolve_user_from_token(token, db)
 
 def require_role(*roles: str):
     """Dependency factory — require one of the given roles."""

@@ -3,18 +3,46 @@ MPS Server - Database models and connection
 SQLite for dev, swap DATABASE_URL for PostgreSQL in production
 """
 import hashlib, json, uuid
+from urllib.parse import quote_plus
 from datetime import datetime, timezone
 from sqlalchemy import (Boolean, Column, DateTime, ForeignKey,
-    Integer, String, Text, create_engine)
+    Integer, String, Text, create_engine, event)
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
 import os as _os
 import pathlib as _pathlib
+from .config import read_secret
 # DB lives next to this file (mps_server/mps.db) regardless of the cwd the
 # server was launched from. Override with DATABASE_URL for PostgreSQL etc.
 _default_db = _pathlib.Path(__file__).parent / "mps.db"
-DATABASE_URL = _os.environ.get("DATABASE_URL", f"sqlite:///{_default_db}")
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+
+def _database_url() -> str:
+    configured = _os.environ.get("DATABASE_URL")
+    if configured:
+        return configured
+    host = _os.environ.get("DB_HOST")
+    if not host:
+        return f"sqlite:///{_default_db}"
+    user = _os.environ.get("DB_USER", "mps")
+    database = _os.environ.get("DB_NAME", "mps")
+    port = _os.environ.get("DB_PORT", "5432")
+    password = read_secret("DB_PASSWORD")
+    if not password:
+        raise RuntimeError("DB_PASSWORD or DB_PASSWORD_FILE is required with DB_HOST")
+    return (
+        "postgresql+psycopg://"
+        f"{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{quote_plus(database)}"
+    )
+
+
+DATABASE_URL = _database_url()
+_connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=_connect_args,
+    pool_pre_ping=True,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 class Base(DeclarativeBase):
@@ -102,8 +130,13 @@ class FeedbackEntry(Base):
     agency_code     = Column(String, nullable=True)
     status          = Column(String, default="pending")
     reject_reason   = Column(Text, nullable=True)
+    source_title    = Column(String, nullable=True)
+    source_url      = Column(Text, nullable=True)
+    effective_date  = Column(String, nullable=True)
     created_at      = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     validated_at    = Column(DateTime, nullable=True)
+    exported_at     = Column(DateTime, nullable=True)
+    export_batch_id = Column(String, nullable=True)
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
@@ -120,6 +153,7 @@ class AuditLog(Base):
     details        = Column(Text, nullable=True)
     prev_hash      = Column(String, nullable=True)
     entry_hash     = Column(String, nullable=True)
+    hash_version   = Column(Integer, nullable=False, default=2)
 
 class RevokedToken(Base):
     """JWT denylist. A logged-out token's jti is stored here and rejected by
@@ -150,11 +184,28 @@ def _canonical_ts(ts) -> str:
     return ts.isoformat()
 
 def compute_audit_hash(entry) -> str:
-    payload = json.dumps({
+    fields = {
         "id": entry.id, "timestamp": _canonical_ts(entry.timestamp),
         "user_id": entry.user_id, "event_type": entry.event_type,
         "session_id": entry.session_id, "case_id": entry.case_id,
         "letter_id": entry.letter_id, "details": entry.details,
         "prev_hash": entry.prev_hash,
-    }, sort_keys=True)
+    }
+    if (entry.hash_version or 1) >= 2:
+        fields.update({
+            "hash_version": entry.hash_version,
+            "role": entry.role,
+            "letter_version": entry.letter_version,
+            "client_ip": entry.client_ip,
+        })
+    payload = json.dumps(fields, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+@event.listens_for(SessionLocal, "before_flush")
+def prevent_audit_mutation(session, flush_context, instances):
+    """Audit rows are immutable through the application ORM."""
+    if any(isinstance(row, AuditLog) for row in session.dirty):
+        raise RuntimeError("AuditLog rows cannot be updated")
+    if any(isinstance(row, AuditLog) for row in session.deleted):
+        raise RuntimeError("AuditLog rows cannot be deleted")
