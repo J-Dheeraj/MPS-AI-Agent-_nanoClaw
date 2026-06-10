@@ -5,7 +5,7 @@ python-multipart==0.0.9          # form data / file uploads
 
 # ── Database ──────────────────────────────────────────────────────────────────
 sqlalchemy==2.0.30
-aiosqlite==0.20.0                # async SQLite driver (dev)
+aiosqlite==0.22.1                # async SQLite driver (dev)
 psycopg[binary]==3.1.19          # PostgreSQL production driver
 alembic==1.13.1                  # versioned schema migrations
 
