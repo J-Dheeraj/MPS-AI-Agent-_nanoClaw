@@ -108,6 +108,12 @@ async def draft_letter_ws(websocket: WebSocket, token: str, db: DBSession = Depe
         await websocket.send_json({"type": "error", "text": "Case not found"})
         await websocket.close()
         return
+    # Volunteers may only draft against their own cases (BOLA check).
+    # Vetters and admins may draft against any case in the session.
+    if user.role == "volunteer" and case.volunteer_id != user.id:
+        await websocket.send_json({"type": "error", "text": "Not your case"})
+        await websocket.close()
+        return
 
     # Get previous letter content if re-appeal
     prev_content = None
@@ -179,7 +185,7 @@ async def draft_letter_ws(websocket: WebSocket, token: str, db: DBSession = Depe
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        await websocket.send_json({"type": "error", "text": str(e)})
+        await websocket.send_json({"type": "error", "text": "Draft generation failed"})
     finally:
         await websocket.close()
 
@@ -215,6 +221,6 @@ async def qa_ws(websocket: WebSocket, token: str, db: DBSession = Depends(get_db
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        await websocket.send_json({"type": "error", "text": str(e)})
+        await websocket.send_json({"type": "error", "text": "Q&A request failed"})
     finally:
         await websocket.close()

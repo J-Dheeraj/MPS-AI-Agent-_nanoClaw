@@ -180,6 +180,16 @@ def vetter_submit(
     if not letter:
         raise HTTPException(400, "No draft letter found for this case")
     transition(case, "pending_mp")    # 409 if not in a vettable state
+    # Re-run blocking privacy/content checks on the vetter's final text.
+    # This prevents a vetter from editing in a full NRIC (or other blocked content)
+    # between the draft-generation validation pass and the final submission.
+    from ..services.validator import validate_letter
+    final_blocks = [w for w in validate_letter(body.final_content) if w.severity == "block"]
+    if final_blocks:
+        raise HTTPException(422, {
+            "detail": "Final letter failed safety check — submission rejected",
+            "blocks": [w.code for w in final_blocks],
+        })
     # Save vetter's final edited text and freeze
     letter.final_content = body.final_content
     letter.status = "vetted"
