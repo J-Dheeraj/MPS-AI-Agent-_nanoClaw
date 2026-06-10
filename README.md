@@ -2,6 +2,8 @@
 
 A self-hosted AI agent purpose-built for Singapore Members of Parliament conducting **Meet-the-People Sessions (MPS)** and constituency casework.
 
+> **Production hardening update - 10 June 2026:** The supported deployment now includes TLS termination, PostgreSQL migrations, Docker secrets, authenticated metrics and alerts, encrypted backup/restore procedures, manifested policy integrity checks, stricter REST and WebSocket authorisation, token revocation, server-side output blocking, CI, and production release gates. See [`docs/PRODUCTION_ARCHITECTURE.md`](docs/PRODUCTION_ARCHITECTURE.md), [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md), and [`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md).
+
 Volunteers and vetters use a **cross-platform Tauri v2 desktop app** to draft and approve formal appeal letters with AI assistance. All AI inference runs fully **on-premises via Ollama** — no Anthropic API key, no cloud calls, no constituent data ever leaves the LAN.
 
 > **Companion repo:** [MPS-AI-Agent-Hermes](https://github.com/J-Dheeraj/MPS-AI-Agent-Hermes) runs offline weekly to improve agent skill files via GEPA (Generalised Experience-driven Policy Adaptation). It also ships a **Hermes Review App** — a Tauri desktop tool for the human review step.
