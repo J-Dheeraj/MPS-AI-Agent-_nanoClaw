@@ -18,6 +18,10 @@ from typing import Optional
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
+VALID_CASE_TYPES = {"grant", "appeal", "enquiry", "re-appeal"}
+VALID_AGENCIES = {"HDB", "CPF", "MSF", "MOH", "MOM", "ICA", "GENERAL"}
+VALID_URGENCIES = {"normal", "urgent", "critical"}
+
 # ── Case status state machine ────────────────────────────────────────────────
 # Every status change must go through transition(). Anything not listed here
 # is rejected with 409 — no ad hoc status writes.
@@ -113,6 +117,22 @@ def create_case(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_volunteer),
 ):
+    case_type = req.case_type.strip().lower()
+    agency = req.agency.strip().upper()
+    urgency = req.urgency.strip().lower()
+    if case_type not in VALID_CASE_TYPES:
+        raise HTTPException(422, f"Unsupported case_type: {req.case_type}")
+    if agency not in VALID_AGENCIES:
+        raise HTTPException(422, f"Unsupported agency: {req.agency}")
+    if urgency not in VALID_URGENCIES:
+        raise HTTPException(422, f"Unsupported urgency: {req.urgency}")
+    if req.notes and len(req.notes) > 20_000:
+        raise HTTPException(422, "Case notes must not exceed 20000 characters")
+    if req.notes:
+        from ..services.redaction import scan
+        if any(kind == "nric_full" for kind, _ in scan(req.notes)):
+            raise HTTPException(422, "Case notes must not contain a full NRIC")
+
     resident = db.query(Resident).filter(Resident.id == req.resident_id).first()
     if not resident:
         raise HTTPException(404, "Resident not found")
@@ -125,12 +145,20 @@ def create_case(
     if not session or session.status not in ("open", "active"):
         raise HTTPException(400, "No active session found")
 
+    parent_case = None
+    if req.parent_case_id:
+        parent_case = db.query(Case).filter(Case.id == req.parent_case_id).first()
+        if not parent_case or parent_case.resident_id != resident.id:
+            raise HTTPException(422, "Parent case must belong to the same resident")
+    if (req.is_reappeal or case_type == "re-appeal") and not parent_case:
+        raise HTTPException(422, "A re-appeal requires a parent_case_id")
+
     case = Case(
         session_id=session.id,
         resident_id=req.resident_id,
-        case_type=req.case_type,
-        agency=req.agency,
-        urgency=req.urgency,
+        case_type=case_type,
+        agency=agency,
+        urgency=urgency,
         is_new_issue=req.is_new_issue and not req.is_reappeal,
         notes=req.notes,
         parent_case_id=req.parent_case_id,
@@ -143,7 +171,7 @@ def create_case(
     log_event(db, "case_created", user_id=current_user.id, role=current_user.role,
               session_id=session.id, case_id=case.id,
               client_ip=request.client.host if request.client else None,
-              details={"case_type": req.case_type, "agency": req.agency})
+        details={"case_type": case_type, "agency": agency})
     return _fmt(case)
 
 @router.post("/{case_id}/submit")
@@ -179,6 +207,25 @@ def vetter_submit(
     letter = _latest_letter(case)
     if not letter:
         raise HTTPException(400, "No draft letter found for this case")
+    if not body.final_content.strip() or len(body.final_content) > 20_000:
+        raise HTTPException(422, "Final letter must be between 1 and 20000 characters")
+    from ..services.validator import validate_letter
+    blocking = [
+        finding
+        for finding in validate_letter(body.final_content)
+        if finding.severity == "block"
+    ]
+    if blocking:
+        raise HTTPException(
+            422,
+            detail={
+                "message": "Final letter failed mandatory safety checks",
+                "findings": [
+                    {"code": finding.code, "message": finding.message}
+                    for finding in blocking
+                ],
+            },
+        )
     transition(case, "pending_mp")    # 409 if not in a vettable state
     # Re-run blocking privacy/content checks on the vetter's final text.
     # This prevents a vetter from editing in a full NRIC (or other blocked content)
@@ -209,6 +256,8 @@ def vetter_return(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_vetter),
 ):
+    if not body.comment.strip() or len(body.comment) > 4_000:
+        raise HTTPException(422, "Return comment must be between 1 and 4000 characters")
     case = db.query(Case).filter(Case.id == case_id).first()
     if not case:
         raise HTTPException(404, "Case not found")
@@ -256,6 +305,8 @@ def _fmt(c: Case) -> dict:
         "letter_id": letter.id if letter else None,
         "latest_letter_id": letter.id if letter else None,
         "letter_status": letter.status if letter else None,
+        "draft_content": letter.draft_content if letter else None,
+        "final_content": letter.final_content if letter else None,
     }
 
 

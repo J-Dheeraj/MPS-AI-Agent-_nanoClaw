@@ -1,0 +1,169 @@
+name: mps-agent
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mps
+      POSTGRES_USER: mps
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mps -d mps"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: ["no-new-privileges:true"]
+
+  ollama:
+    image: ${OLLAMA_IMAGE}
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+    security_opt: ["no-new-privileges:true"]
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE}
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: &server_environment
+      ENVIRONMENT: production
+      DB_HOST: postgres
+      DB_NAME: mps
+      DB_USER: mps
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      SECRET_KEY_FILE: /run/secrets/jwt_secret
+      METRICS_TOKEN_FILE: /run/secrets/metrics_token
+      BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+      POLICY_DIR: /app/policy/active
+      ALLOWED_ORIGINS: https://${MPS_HOST}
+      TRUSTED_HOSTS: ${MPS_HOST},localhost,127.0.0.1,server
+      TLS_TERMINATED_BY_PROXY: "true"
+      FORCE_HTTPS: "false"
+      LOG_FORMAT: json
+      ALLOW_SIGNUP: "false"
+    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password]
+    networks: [backend]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE}
+    restart: unless-stopped
+    environment: *server_environment
+    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password]
+    networks: [backend]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: ${CADDY_IMAGE}
+    restart: unless-stopped
+    environment:
+      MPS_HOST: ${MPS_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge, backend]
+    depends_on:
+      server:
+        condition: service_healthy
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    secrets: [metrics_token]
+    networks: [backend]
+    depends_on:
+      server:
+        condition: service_healthy
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE}
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    secrets: [alert_webhook_url]
+    networks: [backend]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  metrics_token:
+    file: ./secrets/metrics_token.txt
+  bootstrap_admin_password:
+    file: ./secrets/bootstrap_admin_password.txt
+  alert_webhook_url:
+    file: ./secrets/alert_webhook_url.txt
+
+networks:
+  edge: {}
+  backend:
+    internal: true
+
+volumes:
+  postgres_data: {}
+  ollama_data: {}
+  caddy_data: {}
+  caddy_config: {}
+  prometheus_data: {}
+  alertmanager_data: {}

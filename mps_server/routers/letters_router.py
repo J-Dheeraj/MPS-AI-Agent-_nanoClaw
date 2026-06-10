@@ -1,27 +1,82 @@
 import asyncio
-import json
-from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session as DBSession
-from ..database import Case, Letter, get_db, User
-from ..auth import require_volunteer, decode_token, get_db as auth_get_db
+
+from ..auth import require_volunteer, resolve_user_from_token
+from ..database import Case, Letter, User, get_db
 from ..services.audit import log_event
-from ..services.ollama_client import (llm_queue, Priority,
-    build_draft_messages, build_qa_messages)
-from pydantic import BaseModel
-from typing import Optional
+from ..services.ollama_client import (
+    Priority,
+    build_draft_messages,
+    build_qa_messages,
+    llm_queue,
+)
+from ..services.policy_store import PolicyStoreError, load_policy_context
+from ..services.validator import validate_letter
 
 router = APIRouter(prefix="/letters", tags=["letters"])
 
+
 class LetterUpdate(BaseModel):
-    content: str
+    content: str = Field(min_length=1, max_length=20_000)
+
 
 class DraftRequest(BaseModel):
-    case_id:         str
-    notes:           str
-    is_reappeal:     bool = False
-    previous_letter_id: Optional[str] = None
-    rejection_reason:   Optional[str] = None
+    case_id: str
+    is_reappeal: bool = False
+
+
+def _can_access_case(user: User, case: Case) -> bool:
+    return user.role in {"vetter", "admin"} or case.volunteer_id == user.id
+
+
+def _accessible_letter(db: DBSession, letter_id: str, user: User) -> Letter:
+    letter = db.query(Letter).filter(Letter.id == letter_id).first()
+    if not letter or not _can_access_case(user, letter.case):
+        # Do not reveal whether an inaccessible object exists.
+        raise HTTPException(404, "Letter not found")
+    return letter
+
+
+async def _authenticate_websocket(
+    websocket: WebSocket,
+    db: DBSession,
+    allowed_roles: set[str],
+) -> User | None:
+    """Authenticate from the first message so bearer tokens never enter URLs."""
+    try:
+        message = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+        if message.get("type") != "auth" or not isinstance(message.get("token"), str):
+            raise ValueError("missing authentication message")
+        user = resolve_user_from_token(message["token"], db)
+        if user.role not in allowed_roles:
+            raise ValueError("role not permitted")
+        await websocket.send_json({"type": "authenticated"})
+        return user
+    except Exception:
+        await _safe_ws_error(websocket, "Unauthorised")
+        await _safe_ws_close(websocket, 1008)
+        return None
+
+
+async def _safe_ws_error(websocket: WebSocket, message: str) -> None:
+    try:
+        await websocket.send_json({"type": "error", "text": message})
+    except Exception:
+        pass
+
+
+async def _safe_ws_close(websocket: WebSocket, code: int = 1000) -> None:
+    try:
+        await websocket.close(code=code)
+    except Exception:
+        pass
+
+
+def _blocking_findings(content: str):
+    return [finding for finding in validate_letter(content) if finding.severity == "block"]
+
 
 @router.get("/{letter_id}")
 def get_letter(
@@ -29,17 +84,18 @@ def get_letter(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_volunteer),
 ):
-    letter = db.query(Letter).filter(Letter.id == letter_id).first()
-    if not letter:
-        raise HTTPException(404, "Letter not found")
+    letter = _accessible_letter(db, letter_id, current_user)
     return {
-        "id": letter.id, "case_id": letter.case_id,
+        "id": letter.id,
+        "case_id": letter.case_id,
         "draft_content": letter.draft_content,
         "final_content": letter.final_content,
-        "version": letter.version, "status": letter.status,
+        "version": letter.version,
+        "status": letter.status,
         "vetter_comment": letter.vetter_comment,
         "is_frozen": letter.is_frozen,
     }
+
 
 @router.put("/{letter_id}")
 def update_letter(
@@ -49,178 +105,248 @@ def update_letter(
     db: DBSession = Depends(get_db),
     current_user: User = Depends(require_volunteer),
 ):
-    """
-    Volunteer or vetter edits a draft letter.
-    Vetters edit the final text directly before submitting to MP via POST /vetter-submit.
-    Frozen letters (already submitted to MP) cannot be edited.
-    """
-    letter = db.query(Letter).filter(Letter.id == letter_id).first()
-    if not letter:
-        raise HTTPException(404, "Letter not found")
+    letter = _accessible_letter(db, letter_id, current_user)
     if letter.is_frozen:
-        raise HTTPException(403, "Letter has been submitted to MP — cannot be edited")
-    # Volunteers update draft_content; vetters update both (their edit becomes the final)
+        raise HTTPException(403, "Letter has been submitted to MP and cannot be edited")
+
+    blocking = _blocking_findings(body.content)
+    if blocking:
+        raise HTTPException(
+            422,
+            detail={
+                "message": "Letter failed mandatory safety checks",
+                "findings": [
+                    {"code": finding.code, "message": finding.message}
+                    for finding in blocking
+                ],
+            },
+        )
+
     letter.draft_content = body.content
     db.commit()
-    log_event(db, "letter_edited", user_id=current_user.id, role=current_user.role,
-              letter_id=letter_id, letter_version=letter.version,
-              client_ip=request.client.host if request.client else None)
+    log_event(
+        db,
+        "letter_edited",
+        user_id=current_user.id,
+        role=current_user.role,
+        case_id=letter.case_id,
+        letter_id=letter_id,
+        letter_version=letter.version,
+        client_ip=request.client.host if request.client else None,
+    )
     return {"id": letter.id, "status": "updated"}
 
+
 @router.websocket("/ws/draft")
-async def draft_letter_ws(websocket: WebSocket, token: str, db: DBSession = Depends(get_db)):
-    """
-    WebSocket endpoint for streaming letter draft.
-    Client sends: {case_id, notes, is_reappeal, previous_letter_id, rejection_reason}
-    Server streams: {type: chunk|done|error, text, letter_id, queue_position}
-    """
+async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db)):
+    """Generate a draft using authenticated, server-owned case context."""
     await websocket.accept()
-
-    # Authenticate
-    try:
-        payload = decode_token(token)
-        user_id = payload.get("sub")
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            await websocket.send_json({"type": "error", "text": "Unauthorised"})
-            await websocket.close()
-            return
-    except Exception:
-        await websocket.send_json({"type": "error", "text": "Unauthorised"})
-        await websocket.close()
+    user = await _authenticate_websocket(
+        websocket, db, {"volunteer", "vetter", "admin"}
+    )
+    if not user:
         return
 
     try:
-        data = await asyncio.wait_for(websocket.receive_json(), timeout=30)
-    except asyncio.TimeoutError:
-        await websocket.send_json({"type": "error", "text": "Timeout waiting for request"})
-        await websocket.close()
+        request_data = DraftRequest(
+            **await asyncio.wait_for(websocket.receive_json(), timeout=30)
+        )
+    except (asyncio.TimeoutError, ValidationError, TypeError):
+        await _safe_ws_error(websocket, "Invalid or timed-out draft request")
+        await _safe_ws_close(websocket, 1008)
         return
 
-    case_id = data.get("case_id")
-    notes   = data.get("notes", "")
-    is_reappeal = data.get("is_reappeal", False)
-    prev_letter_id = data.get("previous_letter_id")
-    rejection_reason = data.get("rejection_reason")
-
-    case = db.query(Case).filter(Case.id == case_id).first()
-    if not case:
-        await websocket.send_json({"type": "error", "text": "Case not found"})
-        await websocket.close()
+    case = db.query(Case).filter(Case.id == request_data.case_id).first()
+    if not case or not _can_access_case(user, case):
+        await _safe_ws_error(websocket, "Case not found")
+        await _safe_ws_close(websocket, 1008)
         return
-    # Volunteers may only draft against their own cases (BOLA check).
-    # Vetters and admins may draft against any case in the session.
-    if user.role == "volunteer" and case.volunteer_id != user.id:
-        await websocket.send_json({"type": "error", "text": "Not your case"})
-        await websocket.close()
+    if case.status not in {"assigned", "drafted"}:
+        await _safe_ws_error(websocket, "Case is not in a draftable state")
+        await _safe_ws_close(websocket, 1008)
         return
 
-    # Get previous letter content if re-appeal
-    prev_content = None
-    if prev_letter_id:
-        prev_letter = db.query(Letter).filter(Letter.id == prev_letter_id).first()
-        if prev_letter:
-            prev_content = prev_letter.final_content or prev_letter.draft_content
+    # Re-appeal context is derived from the server-side parent relationship.
+    # The client cannot nominate an arbitrary letter from another case.
+    is_reappeal = bool(request_data.is_reappeal or not case.is_new_issue)
+    previous_content = None
+    if is_reappeal and case.parent_case_id:
+        previous_letter = (
+            db.query(Letter)
+            .filter(Letter.case_id == case.parent_case_id)
+            .order_by(Letter.version.desc())
+            .first()
+        )
+        if previous_letter:
+            previous_content = (
+                previous_letter.final_content or previous_letter.draft_content
+            )
 
-    # Tell client queue position
-    queue_pos = llm_queue.depth()
-    if queue_pos > 0:
-        await websocket.send_json({
-            "type": "queue",
-            "queue_position": queue_pos,
-            "message": f"Position {queue_pos} in queue — drafting will begin shortly"
-        })
+    try:
+        policy_context, policy_sources, policy_version = load_policy_context(case.agency)
+    except PolicyStoreError:
+        await _safe_ws_error(websocket, "Approved policy store failed integrity checks")
+        await _safe_ws_close(websocket, 1011)
+        return
 
-    # Create or update letter record
-    letter = (db.query(Letter).filter(Letter.case_id == case_id,
-              Letter.status.in_(["draft", "returned"])).first())
+    queue_position = llm_queue.depth()
+    if queue_position > 0:
+        await websocket.send_json(
+            {
+                "type": "queue",
+                "queue_position": queue_position,
+                "message": f"Position {queue_position} in queue",
+            }
+        )
+
+    letter = (
+        db.query(Letter)
+        .filter(
+            Letter.case_id == case.id,
+            Letter.status.in_(["draft", "returned"]),
+        )
+        .first()
+    )
     if not letter:
-        letter = Letter(case_id=case_id, status="draft", version=1)
+        letter = Letter(case_id=case.id, status="draft", version=1)
         db.add(letter)
     else:
         letter.version += 1
-    letter.draft_content = ""
+    letter.draft_content = None
+
     from .cases_router import transition
+
     transition(case, "drafting")
     db.commit()
 
-    # Build messages
-    priority = Priority.URGENT if case.urgency == "urgent" else Priority.NORMAL
     messages = build_draft_messages(
         case_type=case.case_type,
         agency=case.agency,
-        notes=notes,
+        notes=case.notes or "",
         is_reappeal=is_reappeal,
-        previous_letter=prev_content,
-        rejection_reason=rejection_reason,
+        previous_letter=previous_content,
+        rejection_reason=None,
+        policy_context=policy_context,
     )
+    priority = Priority.URGENT if case.urgency == "urgent" else Priority.NORMAL
 
-    # Stream response
-    full_text = ""
     try:
+        full_text = ""
         async for chunk in llm_queue.run(messages, priority=priority):
             full_text += chunk
-            await websocket.send_json({"type": "chunk", "text": chunk})
 
-        # Save completed draft
+        findings = validate_letter(full_text)
+        blocking = [finding for finding in findings if finding.severity == "block"]
+        if blocking:
+            transition(case, "drafted")
+            letter.draft_content = None
+            db.commit()
+            log_event(
+                db,
+                "letter_blocked",
+                user_id=user.id,
+                role=user.role,
+                case_id=case.id,
+                letter_id=letter.id,
+                letter_version=letter.version,
+                details={"codes": [finding.code for finding in blocking]},
+            )
+            await _safe_ws_error(
+                websocket, "Generated draft failed mandatory safety checks"
+            )
+            return
+
+        # Persist validated output before delivery. If the client disconnects
+        # mid-stream, a refresh retrieves the completed draft instead of
+        # regenerating or leaving the case stranded.
         letter.draft_content = full_text
         transition(case, "drafted")
         db.commit()
-
-        log_event(db, "letter_drafted", user_id=user.id, role=user.role,
-                  case_id=case_id, letter_id=letter.id, letter_version=letter.version)
-
-        from ..services.validator import validate_letter
-        warnings = [
-            {"severity": w.severity, "code": w.code, "message": w.message}
-            for w in validate_letter(full_text)
-        ]
-        await websocket.send_json({
-            "type": "done",
-            "letter_id": letter.id,
-            "version": letter.version,
-            "text": full_text,
-            "warnings": warnings,   # deterministic post-draft check
-        })
+        log_event(
+            db,
+            "letter_drafted",
+            user_id=user.id,
+            role=user.role,
+            case_id=case.id,
+            letter_id=letter.id,
+            letter_version=letter.version,
+        )
+        for offset in range(0, len(full_text), 256):
+            await websocket.send_json(
+                {"type": "chunk", "text": full_text[offset : offset + 256]}
+            )
+        await websocket.send_json(
+            {
+                "type": "done",
+                "letter_id": letter.id,
+                "version": letter.version,
+                "text": full_text,
+                "warnings": [
+                    {
+                        "severity": finding.severity,
+                        "code": finding.code,
+                        "message": finding.message,
+                    }
+                    for finding in findings
+                ],
+                "policy_sources": policy_sources,
+                "policy_version": policy_version,
+            }
+        )
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        await websocket.send_json({"type": "error", "text": "Draft generation failed"})
+    except Exception:
+        if case.status == "drafting":
+            transition(case, "drafted")
+            db.commit()
+        await _safe_ws_error(websocket, "Draft generation failed")
     finally:
-        await websocket.close()
+        await _safe_ws_close(websocket)
+
 
 @router.websocket("/ws/qa")
-async def qa_ws(websocket: WebSocket, token: str, db: DBSession = Depends(get_db)):
-    """
-    WebSocket for streaming policy Q&A.
-    Client sends: {question, case_id (optional)}
-    Server streams: {type: chunk|done, text}
-    """
+async def qa_ws(websocket: WebSocket, db: DBSession = Depends(get_db)):
+    """Answer only from manifested, reviewed policy rules."""
     await websocket.accept()
-    try:
-        payload = decode_token(token)
-        user = db.query(User).filter(User.id == payload.get("sub")).first()
-        if not user:
-            await websocket.send_json({"type": "error", "text": "Unauthorised"})
-            await websocket.close()
-            return
-    except Exception:
-        await websocket.send_json({"type": "error", "text": "Unauthorised"})
-        await websocket.close()
+    user = await _authenticate_websocket(
+        websocket, db, {"volunteer", "vetter", "admin"}
+    )
+    if not user:
         return
 
     try:
         data = await asyncio.wait_for(websocket.receive_json(), timeout=30)
-        question = data.get("question", "")
-        messages = build_qa_messages(question)
+        question = str(data.get("question", "")).strip()
+        if not question or len(question) > 2_000:
+            await _safe_ws_error(
+                websocket, "Question must be between 1 and 2000 characters"
+            )
+            return
+        agency = str(data.get("agency", "")).strip().upper()
+        try:
+            policy_context, policy_sources, policy_version = load_policy_context(agency)
+        except PolicyStoreError:
+            await _safe_ws_error(websocket, "Approved policy store failed integrity checks")
+            return
+        if not policy_context:
+            await _safe_ws_error(
+                websocket, "No approved policy sources are available for this agency"
+            )
+            return
 
+        messages = build_qa_messages(question, context=policy_context)
         async for chunk in llm_queue.run(messages, priority=Priority.LOW):
             await websocket.send_json({"type": "chunk", "text": chunk})
-
-        await websocket.send_json({"type": "done"})
+        await websocket.send_json(
+            {
+                "type": "done",
+                "policy_sources": policy_sources,
+                "policy_version": policy_version,
+            }
+        )
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        await websocket.send_json({"type": "error", "text": "Q&A request failed"})
+    except Exception:
+        await _safe_ws_error(websocket, "Policy Q&A failed")
     finally:
-        await websocket.close()
+        await _safe_ws_close(websocket)

@@ -1,0 +1,27 @@
+groups:
+  - name: mps-agent
+    rules:
+      - alert: MpsServerDown
+        expr: up{job="mps-server"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: MPS server metrics endpoint is unavailable
+      - alert: MpsHighErrorRate
+        expr: sum(rate(mps_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(mps_http_requests_total[5m])), 0.001) > 0.02
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: MPS server error rate exceeds 2 percent
+      - alert: MpsSlowRequests
+        expr: histogram_quantile(0.95, sum by (le) (rate(mps_http_request_duration_seconds_bucket[10m]))) > 2
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: MPS API p95 latency exceeds two seconds
+      - alert: MpsLlmQueueBacklog
+        expr: mps_llm_queue_depth > 10
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: LLM queue has sustained backlog

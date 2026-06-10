@@ -27,24 +27,19 @@ import { getToken } from "./session";
  *
  * @param {object} params
  * @param {number} params.caseId
- * @param {string} params.notes        -- volunteer's case notes (the prompt input)
  * @param {"LETTER"|"REAPPEAL"} [params.kind]
  * @param {(chunk: string) => void} onToken      -- called for each streamed token/chunk
  * @param {(letterId: number) => void} onDone    -- called once when generation completes
  * @param {(message: string) => void} onError    -- called on any error (queue full, Ollama down, etc.)
  * @returns {Promise<() => void>} a `cancel` function that closes the socket early
  */
-export async function streamLetterDraft({ caseId, notes, isReappeal = false, previousLetterId = null, rejectionReason = null }, { onToken, onDone, onError, onQueue }) {
+export async function streamLetterDraft({ caseId, isReappeal = false }, { onToken, onDone, onError, onQueue }) {
   const { wsUrl } = await getServerConfig();
   const token = await getToken();
   if (!wsUrl) throw new Error("Server not configured.");
   if (!token) throw new Error("Not authenticated.");
 
-  // Token goes in the query string because the WebSocket handshake can't
-  // carry an Authorization header from the browser/webview side. mps_server's
-  // letters_router should validate it the same way the REST endpoints do.
-  const url = `${wsUrl}/letters/ws/draft?token=${encodeURIComponent(token)}`;
-  const socket = await WebSocket.connect(url);
+  const socket = await WebSocket.connect(`${wsUrl}/letters/ws/draft`);
 
   socket.addListener((message) => {
     const data = parseMessage(message);
@@ -69,12 +64,10 @@ export async function streamLetterDraft({ caseId, notes, isReappeal = false, pre
     }
   });
 
+  await socket.send(JSON.stringify({ type: "auth", token }));
   await socket.send(JSON.stringify({
     case_id: caseId,
-    notes,
     is_reappeal: isReappeal,
-    previous_letter_id: previousLetterId,
-    rejection_reason: rejectionReason,
   }));
 
   return () => socket.disconnect();
@@ -90,8 +83,7 @@ export async function streamPolicyQA({ question, agency }, { onToken, onDone, on
   if (!wsUrl) throw new Error("Server not configured.");
   if (!token) throw new Error("Not authenticated.");
 
-  const url = `${wsUrl}/letters/ws/qa?token=${encodeURIComponent(token)}`;
-  const socket = await WebSocket.connect(url);
+  const socket = await WebSocket.connect(`${wsUrl}/letters/ws/qa`);
 
   socket.addListener((message) => {
     const data = parseMessage(message);
@@ -101,6 +93,7 @@ export async function streamPolicyQA({ question, agency }, { onToken, onDone, on
     else if (data.type === "error") { onError?.(data.text ?? "Unknown error"); socket.disconnect(); }
   });
 
+  await socket.send(JSON.stringify({ type: "auth", token }));
   await socket.send(JSON.stringify({ question, agency }));
   return () => socket.disconnect();
 }

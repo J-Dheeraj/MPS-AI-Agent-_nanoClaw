@@ -1,0 +1,25 @@
+ARG PYTHON_BASE_IMAGE=python:3.12.4-slim-bookworm
+FROM ${PYTHON_BASE_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 mps \
+    && useradd --uid 10001 --gid mps --no-create-home --shell /usr/sbin/nologin mps
+
+WORKDIR /app
+COPY mps_server/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --requirement /tmp/requirements.txt
+
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
+COPY mps_server ./mps_server
+COPY policy ./policy
+
+USER 10001:10001
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "mps_server.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

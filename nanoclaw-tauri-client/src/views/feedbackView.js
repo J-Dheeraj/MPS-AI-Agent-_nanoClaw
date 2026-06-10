@@ -39,7 +39,7 @@ export async function renderFeedback(container, { caseRecord } = {}) {
       <div class="error-banner" id="fb-error" style="display:none"></div>
       <button class="primary" id="fb-submit">Log feedback</button>
 
-      ${role === "admin" ? `
+      ${["vetter", "admin"].includes(role) ? `
         <h3 style="margin-top:24px">Pending validation</h3>
         <div id="fb-pending"><p class="muted">Loading…</p></div>
       ` : ""}
@@ -64,7 +64,7 @@ export async function renderFeedback(container, { caseRecord } = {}) {
     } catch (e) { showError(`Couldn't log feedback: ${e.body?.detail ?? e.message ?? e}`); }
   });
 
-  if (role === "admin") {
+  if (["vetter", "admin"].includes(role)) {
     await loadPending(wrap);
   }
 }
@@ -82,19 +82,29 @@ async function loadPending(wrap) {
         <strong>${escapeHtml(item.agency_code ?? "")}</strong>
         <div class="muted" style="font-size:13px">Issue: ${escapeHtml(item.incorrect_claim ?? "")}</div>
         <div class="muted" style="font-size:13px">Correction: ${escapeHtml(item.correct_answer ?? "")}</div>
+        <div class="field"><label>Official source title</label><input data-source-title maxlength="300" /></div>
+        <div class="field"><label>Official HTTPS source URL</label><input data-source-url type="url" maxlength="2000" placeholder="https://www.example.gov.sg/..." /></div>
+        <div class="field"><label>Effective date</label><input data-effective-date type="date" /></div>
         <div style="margin-top:8px;display:flex;gap:8px">
           <button data-action="reject">Reject</button>
           <button class="primary" data-action="approve">Approve</button>
         </div>
       `;
       row.querySelector('[data-action="approve"]').addEventListener("click", async () => {
-        await validateFeedback(item.id, true);
+        const sourceTitle = row.querySelector('[data-source-title]').value.trim();
+        const sourceUrl = row.querySelector('[data-source-url]').value.trim();
+        const effectiveDate = row.querySelector('[data-effective-date]').value;
+        if (!sourceTitle || !sourceUrl || !effectiveDate) {
+          host.insertAdjacentHTML("afterbegin", '<div class="error-banner">Source title, URL and effective date are required.</div>');
+          return;
+        }
+        await validateFeedback(item.id, true, { sourceTitle, sourceUrl, effectiveDate });
         await loadPending(wrap);
       });
       row.querySelector('[data-action="reject"]').addEventListener("click", async () => {
         const reason = prompt("Reason for rejecting this correction:");
         if (!reason) return;
-        await validateFeedback(item.id, false, reason);
+        await validateFeedback(item.id, false, { rejectReason: reason });
         await loadPending(wrap);
       });
       host.appendChild(row);
