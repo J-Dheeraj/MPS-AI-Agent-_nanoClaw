@@ -131,9 +131,19 @@ def get_db():
 def create_tables():
     Base.metadata.create_all(bind=engine)
 
+def _canonical_ts(ts) -> str:
+    """Timestamps must hash identically before and after the SQLite round
+    trip. SQLite drops tzinfo, so we canonicalise to naive-UTC ISO format."""
+    if ts is None:
+        return ""
+    if ts.tzinfo is not None:
+        from datetime import timezone as _tz
+        ts = ts.astimezone(_tz.utc).replace(tzinfo=None)
+    return ts.isoformat()
+
 def compute_audit_hash(entry) -> str:
     payload = json.dumps({
-        "id": entry.id, "timestamp": str(entry.timestamp),
+        "id": entry.id, "timestamp": _canonical_ts(entry.timestamp),
         "user_id": entry.user_id, "event_type": entry.event_type,
         "session_id": entry.session_id, "case_id": entry.case_id,
         "letter_id": entry.letter_id, "details": entry.details,

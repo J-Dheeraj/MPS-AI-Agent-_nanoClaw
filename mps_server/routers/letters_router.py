@@ -134,7 +134,8 @@ async def draft_letter_ws(websocket: WebSocket, token: str, db: DBSession = Depe
     else:
         letter.version += 1
     letter.draft_content = ""
-    case.status = "drafting"
+    from .cases_router import transition
+    transition(case, "drafting")
     db.commit()
 
     # Build messages
@@ -157,7 +158,7 @@ async def draft_letter_ws(websocket: WebSocket, token: str, db: DBSession = Depe
 
         # Save completed draft
         letter.draft_content = full_text
-        case.status = "drafted"
+        transition(case, "drafted")
         db.commit()
 
         log_event(db, "letter_drafted", user_id=user.id, role=user.role,

@@ -79,9 +79,9 @@ async function loadPending(wrap) {
       const row = document.createElement("div");
       row.className = "case-row";
       row.innerHTML = `
-        <strong>${item.agency}</strong>
-        <div class="muted" style="font-size:13px">Issue: ${escapeHtml(item.issue)}</div>
-        <div class="muted" style="font-size:13px">Correction: ${escapeHtml(item.correction)}</div>
+        <strong>${escapeHtml(item.agency_code ?? "")}</strong>
+        <div class="muted" style="font-size:13px">Issue: ${escapeHtml(item.incorrect_claim ?? "")}</div>
+        <div class="muted" style="font-size:13px">Correction: ${escapeHtml(item.correct_answer ?? "")}</div>
         <div style="margin-top:8px;display:flex;gap:8px">
           <button data-action="reject">Reject</button>
           <button class="primary" data-action="approve">Approve</button>
@@ -100,7 +100,7 @@ async function loadPending(wrap) {
       host.appendChild(row);
     }
   } catch (e) {
-    host.innerHTML = `<div class="error-banner">Couldn't load pending feedback: ${e.message ?? e}</div>`;
+    host.innerHTML = `<div class="error-banner">Couldn't load pending feedback: ${escapeHtml(String(e.message ?? e))}</div>`;
   }
 }
 

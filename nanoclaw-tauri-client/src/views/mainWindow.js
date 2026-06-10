@@ -112,8 +112,8 @@ async function loadCases(shell) {
       const row = document.createElement("div");
       row.className = "case-row" + (c.id === getState().selectedCaseId ? " selected" : "");
       row.innerHTML = `
-        <strong>${c.case_type}</strong> <span class="badge ${c.status}">${c.status}</span>
-        <div class="muted" style="font-size:12px">${c.agency} • ${c.resident?.name ?? "resident"} • ${c.urgency}${c.is_reappeal ? " • re-appeal" : ""}</div>
+        <strong>${escapeHtml(c.case_type)}</strong> <span class="badge ${escapeHtml(c.status)}">${escapeHtml(c.status)}</span>
+        <div class="muted" style="font-size:12px">${escapeHtml(c.agency)} • ${escapeHtml(c.resident?.name ?? "resident")} • ${escapeHtml(c.urgency)}${c.is_reappeal ? " • re-appeal" : ""}</div>
       `;
       row.addEventListener("click", () => setState({ selectedCaseId: c.id }));
       list.appendChild(row);

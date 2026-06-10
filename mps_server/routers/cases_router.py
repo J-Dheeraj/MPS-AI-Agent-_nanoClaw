@@ -18,6 +18,26 @@ from typing import Optional
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
+# ── Case status state machine ────────────────────────────────────────────────
+# Every status change must go through transition(). Anything not listed here
+# is rejected with 409 — no ad hoc status writes.
+CASE_TRANSITIONS = {
+    "assigned":   {"drafting", "drafted", "pending_mp"},  # pending_mp: vetter may submit a returned case directly
+    "drafting":   {"drafted"},
+    "drafted":    {"drafting", "drafted", "pending_mp", "assigned"},  # regenerate / resubmit / vetter-submit / vetter-return
+    "pending_mp": {"approved"},
+    "approved":   {"sent"},
+    "sent":       set(),
+}
+
+def transition(case: "Case", new_status: str) -> None:
+    allowed = CASE_TRANSITIONS.get(case.status, set())
+    if new_status not in allowed:
+        raise HTTPException(
+            409, f"Invalid case status transition: {case.status} -> {new_status}"
+        )
+    case.status = new_status
+
 class CaseCreateRequest(BaseModel):
     resident_id:    str
     case_type:      str
@@ -134,9 +154,7 @@ def submit_for_vetting(
     current_user: User = Depends(require_volunteer),
 ):
     case = _get_own_case(case_id, current_user.id, db)
-    if case.status not in ("assigned", "drafting", "drafted"):
-        raise HTTPException(400, "Case is not in a submittable state")
-    case.status = "drafted"
+    transition(case, "drafted")
     db.commit()
     log_event(db, "case_submitted", user_id=current_user.id, role=current_user.role,
               case_id=case_id, client_ip=request.client.host if request.client else None)
@@ -156,17 +174,17 @@ def vetter_submit(
     This is the primary vetter action — the vetter owns the final letter text.
     """
     case = db.query(Case).filter(Case.id == case_id).first()
-    if not case or case.status not in ("drafted", "assigned"):
-        raise HTTPException(400, "Case is not in a vettable state")
+    if not case:
+        raise HTTPException(404, "Case not found")
     letter = _latest_letter(case)
     if not letter:
         raise HTTPException(400, "No draft letter found for this case")
+    transition(case, "pending_mp")    # 409 if not in a vettable state
     # Save vetter's final edited text and freeze
     letter.final_content = body.final_content
     letter.status = "vetted"
     letter.vetted_at = datetime.now(timezone.utc)
     letter.is_frozen = True           # no further edits allowed
-    case.status = "pending_mp"        # waiting for MP's final check
     db.commit()
     log_event(db, "vetter_submitted", user_id=current_user.id, role=current_user.role,
               case_id=case_id, letter_id=letter.id, letter_version=letter.version,
@@ -182,9 +200,9 @@ def vetter_return(
     current_user: User = Depends(require_vetter),
 ):
     case = db.query(Case).filter(Case.id == case_id).first()
-    if not case or case.status != "drafted":
-        raise HTTPException(400, "Case not in review queue")
-    case.status = "assigned"
+    if not case:
+        raise HTTPException(404, "Case not found")
+    transition(case, "assigned")      # 409 unless case is in the review queue
     letter = _latest_letter(case)
     if letter:
         letter.status = "returned"

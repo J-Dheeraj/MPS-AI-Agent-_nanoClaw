@@ -16,3 +16,4 @@ mps_server/*.db
 __pycache__/
 *.pyc
 .env
+backups/

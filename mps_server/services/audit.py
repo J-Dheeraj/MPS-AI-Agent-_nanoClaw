@@ -2,6 +2,7 @@
 Audit service - append-only hash-chained log
 """
 import json
+import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from ..database import AuditLog, compute_audit_hash
@@ -23,6 +24,9 @@ def log_event(
     prev_hash = last.entry_hash if last else None
 
     entry = AuditLog(
+        # id must be set BEFORE hashing: compute_audit_hash includes it, and
+        # the column default only fires at flush (after the hash is computed).
+        id=str(uuid.uuid4()),
         timestamp=datetime.now(timezone.utc),
         user_id=user_id,
         role=role,
