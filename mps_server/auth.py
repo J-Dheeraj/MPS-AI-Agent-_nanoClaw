@@ -46,6 +46,24 @@ TOKEN_ISSUER = os.getenv("TOKEN_ISSUER", "mps-server")
 TOKEN_AUDIENCE = os.getenv("TOKEN_AUDIENCE", "nanoclaw-client")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# A fixed bcrypt hash used to perform a constant-cost password verification when
+# the supplied username does not exist. Without this, an unknown username
+# returns faster than a known one and the timing difference leaks which
+# usernames are valid (V-H5 anti-enumeration). The plaintext is irrelevant.
+_DUMMY_HASH = pwd_context.hash("dummy-password-for-constant-time-verify")
+
+import pyotp
+
+
+def verify_totp(secret: str, code: str) -> bool:
+    """Verify a 6-digit TOTP code against the user's secret (±1 window)."""
+    if not secret or not code:
+        return False
+    try:
+        return pyotp.TOTP(secret).verify(str(code).strip(), valid_window=1)
+    except Exception:
+        return False
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 ROLES = {"volunteer", "vetter", "admin"}
@@ -131,9 +149,13 @@ def resolve_user_from_token(token: str, db: Session) -> User:
 
 # ── Login / lockout ───────────────────────────
 
-def authenticate_user(db: Session, username: str, password: str) -> User:
+def authenticate_user(db: Session, username: str, password: str,
+                      totp_code: Optional[str] = None) -> User:
     user = db.query(User).filter(User.username == username).first()
     if not user:
+        # Constant-cost verify so an unknown username is indistinguishable, by
+        # timing, from a wrong password on a known username (V-H5).
+        verify_password(password, _DUMMY_HASH)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     # Check lockout
@@ -149,6 +171,14 @@ def authenticate_user(db: Session, username: str, password: str) -> User:
             raise HTTPException(status_code=403, detail="Account locked for 30 minutes after 5 failed attempts.")
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # Second factor: if the account has MFA enabled, a valid TOTP code is
+    # mandatory. A failed code counts as a failed attempt (feeds lockout).
+    if user.totp_secret:
+        if not verify_totp(user.totp_secret, totp_code or ""):
+            user.failed_logins += 1
+            db.commit()
+            raise HTTPException(status_code=401, detail="Invalid or missing MFA code")
 
     # Success — reset failure count
     user.failed_logins = 0

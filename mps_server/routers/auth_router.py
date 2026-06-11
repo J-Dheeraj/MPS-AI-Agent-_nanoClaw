@@ -1,10 +1,14 @@
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Request, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from ..database import User, get_db
 from ..auth import authenticate_user, create_token, hash_password, get_current_user, require_admin, oauth2_scheme, TOKEN_EXPIRE_MINUTES, validate_password_strength
 from ..services.audit import log_event
+from ..services.ratelimit import (
+    login_ip_limiter, login_user_limiter, RateLimitExceeded,
+)
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -26,9 +30,27 @@ class TokenResponse(BaseModel):
 def login(
     request: Request,
     form: OAuth2PasswordRequestForm = Depends(),
+    totp: Optional[str] = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    user = authenticate_user(db, form.username, form.password)
+    # Rate limit by client IP and by username (V-H5). The IP limit throttles an
+    # attacker before they can drive a known account into lockout (lockout DoS);
+    # the per-username limit bounds credential stuffing against one account.
+    client_ip = request.client.host if request.client else "unknown"
+    try:
+        login_ip_limiter.check(client_ip)
+        login_user_limiter.check(form.username.lower())
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Try again later.",
+            headers={"Retry-After": str(exc.retry_after)},
+        )
+
+    user = authenticate_user(db, form.username, form.password, totp_code=totp)
+    # Successful login clears the per-username counter so a genuine user is not
+    # throttled by their own earlier typos.
+    login_user_limiter.reset(form.username.lower())
     token = create_token(
         {"sub": user.id, "role": user.role},
         expires_delta=timedelta(minutes=TOKEN_EXPIRE_MINUTES),
@@ -190,3 +212,59 @@ def change_username(
               client_ip=request.client.host if request.client else None,
               details={"old_username": old_username, "new_username": new_username})
     return {"message": "Username changed successfully", "new_username": new_username}
+
+
+# ── Multi-factor authentication (TOTP) ───────────────────────────────────────
+import pyotp
+
+
+class MfaActivateRequest(BaseModel):
+    code: str
+
+
+@router.post("/mfa/enroll")
+def mfa_enroll(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Begin TOTP enrolment: generate a secret and return the provisioning URI.
+    The secret is stored but MFA is only enforced once /mfa/activate confirms a
+    valid code, so a half-finished enrolment cannot lock the user out."""
+    if current_user.totp_secret:
+        raise HTTPException(409, "MFA is already enabled for this account")
+    secret = pyotp.random_base32()
+    current_user.totp_secret = secret
+    db.commit()
+    uri = pyotp.TOTP(secret).provisioning_uri(
+        name=current_user.username, issuer_name="MPS AI Agent"
+    )
+    return {"secret": secret, "otpauth_uri": uri,
+            "note": "Scan in an authenticator app, then POST the 6-digit code to /auth/mfa/activate"}
+
+
+@router.post("/mfa/activate")
+def mfa_activate(req: MfaActivateRequest, request: Request,
+                 current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Confirm enrolment by verifying a code against the pending secret."""
+    from ..auth import verify_totp
+    if not current_user.totp_secret:
+        raise HTTPException(400, "Start enrolment via /auth/mfa/enroll first")
+    if not verify_totp(current_user.totp_secret, req.code):
+        raise HTTPException(401, "Invalid MFA code")
+    log_event(db, "mfa_activated", user_id=current_user.id, role=current_user.role,
+              client_ip=request.client.host if request.client else None)
+    return {"status": "mfa_enabled"}
+
+
+@router.post("/mfa/disable")
+def mfa_disable(req: MfaActivateRequest, request: Request,
+                current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Disable MFA. Requires a current valid code so a stolen session cannot
+    silently remove the second factor."""
+    from ..auth import verify_totp
+    if not current_user.totp_secret:
+        raise HTTPException(400, "MFA is not enabled")
+    if not verify_totp(current_user.totp_secret, req.code):
+        raise HTTPException(401, "Invalid MFA code")
+    current_user.totp_secret = None
+    db.commit()
+    log_event(db, "mfa_disabled", user_id=current_user.id, role=current_user.role,
+              client_ip=request.client.host if request.client else None)
+    return {"status": "mfa_disabled"}
