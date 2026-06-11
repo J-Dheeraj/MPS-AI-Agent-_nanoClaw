@@ -195,7 +195,7 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
             )
 
     try:
-        policy_context, policy_sources, policy_version = load_policy_context(case.agency)
+        policy_context, policy_sources, policy_version = load_policy_context(case.agency, case_text=case.notes or "")
     except PolicyStoreError:
         await _safe_ws_error(websocket, "Approved policy store failed integrity checks")
         await _safe_ws_close(websocket, 1011)

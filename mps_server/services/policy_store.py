@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import re
 import os
 from datetime import date
 from pathlib import Path
@@ -128,7 +129,7 @@ def _verify_manifest_signature(manifest_path: Path, manifest_bytes: bytes) -> No
         raise PolicyStoreError("Manifest signature failed verification") from exc
 
 
-def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
+def load_policy_context(agency: str, case_text: str = "") -> tuple[str, list[dict], str | None]:
     agency = agency.strip().upper()
     if agency not in VALID_AGENCIES:
         raise PolicyStoreError(f"Unsupported agency: {agency}")
@@ -137,7 +138,7 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
     manifest_path = root / "manifest.json"
 
     # Cache hit: skip file I/O and signature re-verification (V-M16).
-    key = _cache_key(agency, manifest_path)
+    key = _cache_key(agency, manifest_path) + (case_text.strip().lower(),)
     cached = _get_cached(key)
     if cached is not None:
         return cached
@@ -206,8 +207,18 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
         superseded_ids.update(cr["supersedes"])
     active_rules = [r for r in candidate_rules if r["rule_id"] not in superseded_ids]
 
-    # ── Pass 3: rank by most-recent effective date first (V-H6) ──────────────
-    active_rules.sort(key=lambda r: r["effective_from"], reverse=True)
+    # ── Pass 3: rank rules (V-H6 / V4-I4) ────────────────────────────────────
+    # Deterministic relevance: count of distinct words (len >= 4) shared
+    # between the case text and the rule statement. Rules matching the case
+    # outrank newer-but-unrelated rules; recency breaks ties. Without
+    # case_text every score is 0 and ordering is recency, as before.
+    case_words = {w for w in re.findall(r"[a-z]{4,}", case_text.lower())}
+
+    def _relevance(rule) -> int:
+        statement_words = {w for w in re.findall(r"[a-z]{4,}", rule["statement"].lower())}
+        return len(case_words & statement_words)
+
+    active_rules.sort(key=lambda r: (_relevance(r), r["effective_from"]), reverse=True)
 
     # ── Pass 4: enforce token budget (V-H6) ───────────────────────────────────
     context_lines = []
@@ -220,7 +231,7 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
             f"Source: {source['title']} | {source['url']} | effective {source['effective_date']}"
         )
         if len(line) > budget_remaining:
-            break  # budget exhausted — drop lower-priority rules
+            continue  # this rule does not fit; smaller lower-ranked rules may
         context_lines.append(line)
         sources.append({
             "rule_id": cr["rule_id"],

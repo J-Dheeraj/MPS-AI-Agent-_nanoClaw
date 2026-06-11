@@ -164,3 +164,59 @@ def test_fresh_running_job_not_recovered(jobs_db):
     assert recovered == 0
     jobs_db.refresh(job)
     assert job.status == "running"
+
+
+# ── V4-I4: deterministic packing and relevance ranking ───────────────────────
+
+def test_oversized_rule_skipped_not_terminal(policy_dir, monkeypatch):
+    """An over-budget rule must be skipped, not end packing: a smaller,
+    lower-ranked rule that still fits must be included."""
+    from mps_server.services import policy_store
+    from mps_server.services.policy_store import load_policy_context
+    monkeypatch.setattr(policy_store, "MAX_CONTEXT_CHARS", 200)
+
+    sha1 = _write_rule(policy_dir, "R_BIG", "HDB", "2025-01-01", "A" * 500)
+    sha2 = _write_rule(policy_dir, "R_SMALL", "HDB", "2024-01-01", "Small rule.")
+    _write_manifest(policy_dir, [
+        {"file": "R_BIG.json", "sha256": sha1},
+        {"file": "R_SMALL.json", "sha256": sha2},
+    ])
+
+    context, sources, _ = load_policy_context("HDB")
+    assert [s["rule_id"] for s in sources] == ["R_SMALL"]
+
+
+def test_case_relevance_outranks_recency(policy_dir, monkeypatch):
+    """With case_text supplied, a rule matching the case outranks a newer
+    unrelated rule when the budget only fits one."""
+    from mps_server.services import policy_store
+    from mps_server.services.policy_store import load_policy_context
+    monkeypatch.setattr(policy_store, "MAX_CONTEXT_CHARS", 150)
+
+    sha1 = _write_rule(policy_dir, "R_NEW_OTHER", "HDB", "2026-01-01",
+                       "Carpark season parking renewal terms.")
+    sha2 = _write_rule(policy_dir, "R_OLD_MATCH", "HDB", "2024-01-01",
+                       "Public rental subsidy income ceiling rules.")
+    _write_manifest(policy_dir, [
+        {"file": "R_NEW_OTHER.json", "sha256": sha1},
+        {"file": "R_OLD_MATCH.json", "sha256": sha2},
+    ])
+
+    _, sources, _ = load_policy_context(
+        "HDB", case_text="Resident appealing rejected rental subsidy income assessment")
+    assert [s["rule_id"] for s in sources] == ["R_OLD_MATCH"]
+
+
+def test_no_case_text_keeps_recency_order(policy_dir):
+    """Without case_text the existing recency ordering is preserved."""
+    from mps_server.services.policy_store import load_policy_context
+
+    sha1 = _write_rule(policy_dir, "R_2026", "HDB", "2026-01-01", "Newer rule.")
+    sha2 = _write_rule(policy_dir, "R_2024", "HDB", "2024-01-01", "Older rule.")
+    _write_manifest(policy_dir, [
+        {"file": "R_2026.json", "sha256": sha1},
+        {"file": "R_2024.json", "sha256": sha2},
+    ])
+
+    _, sources, _ = load_policy_context("HDB")
+    assert [s["rule_id"] for s in sources] == ["R_2026", "R_2024"]
