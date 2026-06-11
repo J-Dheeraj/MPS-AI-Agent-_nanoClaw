@@ -64,7 +64,7 @@ def test_ws_draft_creates_and_completes_generation_job(monkeypatch):
     client, db = build_app()
     monkeypatch.setattr(letters_router, "llm_queue", FakeQueue())
     monkeypatch.setattr(letters_router, "load_policy_context",
-                        lambda agency: ("", [], None))
+                        lambda agency, **kw: ("", [], None))
     token = create_token({"sub": "vol-1", "role": "volunteer"})
     with client.websocket_connect("/letters/ws/draft") as ws:
         ws.send_json({"type": "auth", "token": token})
@@ -90,7 +90,7 @@ def test_ws_draft_blocked_output_marks_job_failed(monkeypatch):
 
     monkeypatch.setattr(letters_router, "llm_queue", BadQueue())
     monkeypatch.setattr(letters_router, "load_policy_context",
-                        lambda agency: ("", [], None))
+                        lambda agency, **kw: ("", [], None))
     token = create_token({"sub": "vol-1", "role": "volunteer"})
     with client.websocket_connect("/letters/ws/draft") as ws:
         ws.send_json({"type": "auth", "token": token})
