@@ -51,7 +51,10 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # the supplied username does not exist. Without this, an unknown username
 # returns faster than a known one and the timing difference leaks which
 # usernames are valid (V-H5 anti-enumeration). The plaintext is irrelevant.
-_DUMMY_HASH = pwd_context.hash("dummy-password-for-constant-time-verify")
+# Hardcoded (not computed at import) so importing this module never depends on
+# the bcrypt backend being callable at import time. bcrypt hashes are portable
+# across versions, so verification works regardless of the installed bcrypt.
+_DUMMY_HASH = "$2b$12$i3rvghWRqe6KSFcGfYdhbOXE2kubQBHU0vpvG6cVFMTMdxsE6ONXm"
 
 import pyotp
 
