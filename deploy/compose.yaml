@@ -61,6 +61,9 @@ services:
       # Ed25519 public key for verifying signed policy manifests (V3-C3 / V-C1).
       # Points directly at the Docker secret path so no extra volume mount is needed.
       POLICY_PUBLIC_KEY: /run/secrets/policy_public_key
+      # External audit anchor (V-H9/V4-C2): a dedicated writable volume on the
+      # otherwise read-only server container.
+      AUDIT_CHECKPOINT_FILE: /audit/audit_checkpoint.log
     secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key]
     networks: [backend]
     depends_on:
@@ -86,6 +89,8 @@ services:
       ollama:
         condition: service_healthy
     read_only: true
+    volumes:
+      - audit_checkpoint:/audit
     tmpfs:
       - /tmp:size=64m,noexec,nosuid,nodev
     security_opt: ["no-new-privileges:true"]
@@ -166,6 +171,7 @@ networks:
     internal: true
 
 volumes:
+  audit_checkpoint: {}
   postgres_data: {}
   ollama_data: {}
   caddy_data: {}

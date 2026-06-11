@@ -24,6 +24,9 @@ def _checkpoint_path() -> pathlib.Path:
     return pathlib.Path(os.getenv("AUDIT_CHECKPOINT_FILE", str(default)))
 
 
+_checkpoint_failures = 0  # read by /health/audit-chain (V4-C2)
+
+
 def _write_checkpoint(entry) -> None:
     """Append a single-line checkpoint to the anchor file (V-H9).
 
@@ -39,7 +42,16 @@ def _write_checkpoint(entry) -> None:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
     except OSError:
-        pass  # never let checkpoint failure break the audit log itself
+        # Never let checkpoint failure break the audit log itself, but it must
+        # not be silent either (V4-C2): without the anchor a tampered DB is
+        # undetectable, so log loudly and count failures for alerting.
+        import logging
+        logging.getLogger("mps.audit").error(
+            "AUDIT CHECKPOINT WRITE FAILED for entry %s — external anchor is "
+            "not being maintained; check AUDIT_CHECKPOINT_FILE volume",
+            entry.id)
+        global _checkpoint_failures
+        _checkpoint_failures += 1
 
 
 def log_event(

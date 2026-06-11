@@ -231,6 +231,22 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
     transition(case, "drafting")
     db.commit()
 
+    # Durable job tracking (V4-C1): one job per letter version. A concurrent
+    # duplicate request for the same version is rejected; a failed or stale
+    # job for the version is re-leased and re-run.
+    from ..services.generation_jobs import (
+        create_job, mark_running, mark_completed, mark_failed,
+    )
+    job, job_created = create_job(
+        db, letter_id=letter.id,
+        idempotency_key=f"letter-{letter.id}-v{letter.version}",
+    )
+    if not job_created and job.status == "running":
+        await _safe_ws_error(websocket, "Generation already in progress for this letter")
+        await _safe_ws_close(websocket, 1008)
+        return
+    mark_running(db, job)
+
     messages = build_draft_messages(
         case_type=case.case_type,
         agency=case.agency,
@@ -263,6 +279,7 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
                 letter_version=letter.version,
                 details={"codes": [finding.code for finding in blocking]},
             )
+            mark_failed(db, job, "blocked by validator")
             await _safe_ws_error(
                 websocket, "Generated draft failed mandatory safety checks"
             )
@@ -286,6 +303,7 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
         })
         transition(case, "drafted")
         db.commit()
+        mark_completed(db, job)
         log_event(
             db,
             "letter_drafted",
@@ -318,8 +336,11 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
             }
         )
     except WebSocketDisconnect:
-        pass
+        if job.status == "running":
+            mark_failed(db, job, "client disconnected")
     except Exception:
+        if job.status == "running":
+            mark_failed(db, job, "generation error")
         if case.status == "drafting":
             transition(case, "drafted")
             db.commit()

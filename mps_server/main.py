@@ -10,12 +10,13 @@ import time
 import json
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, Response
 from prometheus_client import Counter, Gauge, Histogram, CONTENT_TYPE_LATEST, generate_latest
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from sqlalchemy.orm import Session
 from .config import read_secret
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ def _validate_production_config() -> None:
         raise RuntimeError("Production policy manifest must be signed (manifest.json.sig)")
 
 # ── Database init ─────────────────────────────────────────────────────────────
-from .database import Base, engine, SessionLocal
+from .database import Base, engine, SessionLocal, get_db
 from . import database  # noqa: F401 — registers all models
 
 # ── Routers ───────────────────────────────────────────────────────────────────
@@ -336,25 +337,64 @@ async def health_compatibility():
     return await readiness()
 
 
+def require_metrics_token(request: Request) -> None:
+    """Same bearer-token gate as /metrics, as a reusable dependency."""
+    configured = read_secret("METRICS_TOKEN", "") or ""
+    supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
+    if configured and not hmac.compare_digest(configured, supplied):
+        raise HTTPException(status_code=401, detail="Unauthorised")
+
+
 @app.get("/health/audit-chain", tags=["health"])
 def verify_audit_chain(db: Session = Depends(get_db),
                        _: None = Depends(require_metrics_token)):
     """Verify audit log hash chain integrity. Requires metrics token (V-H9/V-M15).
     Returns the head hash for cross-referencing with the external checkpoint file."""
     from .database import AuditLog, compute_audit_hash
-    entries = db.query(AuditLog).order_by(AuditLog.created_at).all()
+    from .services import audit as audit_service
+    entries = db.query(AuditLog).order_by(AuditLog.timestamp.asc()).all()
     if not entries:
         AUDIT_CHAIN_STATUS.set(1)
-        return {"status": "ok", "entries": 0, "head_hash": None}
+        return {"status": "ok", "entries": 0, "head_hash": None,
+                "checkpoint": "no_entries",
+                "checkpoint_write_failures": audit_service._checkpoint_failures}
     prev_hash = None
     for entry in entries:
+        # Recompute the content hash (V4-C3): a link check alone would accept
+        # an entry whose fields were edited together with its stored hash chain.
+        if entry.entry_hash and compute_audit_hash(entry) != entry.entry_hash:
+            AUDIT_CHAIN_STATUS.set(0)
+            raise HTTPException(500, detail=f"Audit entry {entry.id} content hash "
+                                            f"mismatch: entry was modified")
         if prev_hash is not None and entry.prev_hash != prev_hash:
             AUDIT_CHAIN_STATUS.set(0)
             raise HTTPException(500, detail=f"Audit chain broken at entry {entry.id}: "
                                             f"expected prev_hash {prev_hash[:16]}...")
         prev_hash = entry.entry_hash
+
+    # Compare the DB head with the external checkpoint anchor (V4-C3).
+    checkpoint = "missing"
+    try:
+        cp = audit_service._checkpoint_path()
+        if cp.exists():
+            lines = [ln for ln in cp.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if lines:
+                anchored_hashes = {ln.split("\t")[2] for ln in lines if len(ln.split("\t")) == 3}
+                if prev_hash in anchored_hashes:
+                    checkpoint = "head_anchored"
+                else:
+                    AUDIT_CHAIN_STATUS.set(0)
+                    raise HTTPException(500, detail="Audit head hash is not present in "
+                                                    "the external checkpoint file")
+    except HTTPException:
+        raise
+    except OSError:
+        checkpoint = "unreadable"
+
     AUDIT_CHAIN_STATUS.set(1)
-    return {"status": "ok", "entries": len(entries), "head_hash": prev_hash}
+    return {"status": "ok", "entries": len(entries), "head_hash": prev_hash,
+            "checkpoint": checkpoint,
+            "checkpoint_write_failures": audit_service._checkpoint_failures}
 
 
 @app.get("/metrics", include_in_schema=False)
