@@ -224,10 +224,21 @@ def build_draft_messages(case_type: str, agency: str, notes: str,
         f"{notes}\n"
         "</UNTRUSTED_CASE_DATA>"
     )
+    # Previous letters and rejection text are untrusted: they were produced by
+    # external parties and could contain injection attempts (V-H7). Enclose each
+    # in its own UNTRUSTED_CASE_DATA block so the model treats them as data.
     if is_reappeal and previous_letter:
-        user_content += f"\n\nPrevious letter sent:\n{previous_letter}"
+        user_content += (
+            "\n\n<UNTRUSTED_CASE_DATA label='previous_letter'>\n"
+            f"{previous_letter}\n"
+            "</UNTRUSTED_CASE_DATA>"
+        )
     if is_reappeal and rejection_reason:
-        user_content += f"\n\nRejection reason given by agency:\n{rejection_reason}"
+        user_content += (
+            "\n\n<UNTRUSTED_CASE_DATA label='rejection_reason'>\n"
+            f"{rejection_reason}\n"
+            "</UNTRUSTED_CASE_DATA>"
+        )
     if policy_context:
         user_content += (
             "\n\n<APPROVED_POLICY_CONTEXT>\n"

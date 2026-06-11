@@ -100,7 +100,7 @@ from .routers.cases_router    import router as cases_router
 from .routers.letters_router  import router as letters_router
 from .routers.feedback_router import router as feedback_router
 
-EXPECTED_SCHEMA_REVISION = "20260612_01"
+EXPECTED_SCHEMA_REVISION = "20260612_02"
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -165,6 +165,14 @@ async def lifespan(app: FastAPI):
     _seed_admin()
 
     log.info("mps-server ready")
+    # Recover jobs that were running when the server last crashed (V-H8).
+    from .services.generation_jobs import recover_stale_jobs
+    from .database import get_db as _get_db
+    with next(_get_db()) as _db:
+        _n = recover_stale_jobs(_db)
+        if _n:
+            log.warning('Recovered %d stale generation job(s) on startup', _n)
+
     yield
     log.info("mps-server shutting down")
 

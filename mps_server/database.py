@@ -126,6 +126,26 @@ class Letter(Base):
     generation_meta = Column(Text, nullable=True)
     case = relationship("Case", back_populates="letters")
 
+
+class GenerationJob(Base):
+    """Tracks letter draft generation requests for idempotency and recovery (V-H8).
+
+    When a draft request arrives, a GenerationJob row is created in 'pending'.
+    The in-memory LLM queue promotes it to 'running' when work starts and
+    'completed' or 'failed' on finish. On server restart, any job still in
+    'running' state is reset to 'pending' so it can be retried.
+    """
+    __tablename__ = "generation_jobs"
+
+    id          = Column(String, primary_key=True, default=lambda: str(__import__("uuid").uuid4()))
+    letter_id   = Column(String, ForeignKey("letters.id"), nullable=False, index=True)
+    status      = Column(String, default="pending", nullable=False)  # pending|running|completed|failed|cancelled
+    idempotency_key = Column(String, nullable=True, unique=True)  # hash of (letter_id, prompt_version, policy_version)
+    started_at  = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    error       = Column(Text, nullable=True)
+    created_at  = Column(DateTime, default=lambda: __import__("datetime").datetime.now(__import__("datetime").timezone.utc))
+
 class FeedbackEntry(Base):
     __tablename__ = "feedback_entries"
     id              = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))

@@ -11,6 +11,11 @@ from urllib.parse import urlparse
 VALID_AGENCIES = {"HDB", "CPF", "MSF", "MOH", "MOM", "ICA", "GENERAL"}
 MAX_RULES = 100
 MAX_RULE_BYTES = 65_536
+# Total character budget for the policy context block sent to the model.
+# At ~4 chars/token this is roughly 4 000 tokens — enough for ~25 detailed rules
+# while leaving headroom for the letter draft in a 8k-token model (V-H6).
+# Override with POLICY_CONTEXT_BUDGET env var (characters).
+MAX_CONTEXT_CHARS = int(__import__('os').getenv('POLICY_CONTEXT_BUDGET', '16000'))
 
 
 class PolicyStoreError(RuntimeError):
@@ -37,6 +42,12 @@ def _validate_source(source: dict) -> None:
         date.fromisoformat(str(source.get("effective_date", "")))
     except ValueError as exc:
         raise PolicyStoreError("Policy effective date is invalid") from exc
+    effective_to = source.get("effective_to")
+    if effective_to is not None:
+        try:
+            date.fromisoformat(str(effective_to))
+        except ValueError as exc:
+            raise PolicyStoreError("Policy effective_to date is invalid") from exc
 
 
 def _verify_manifest_signature(manifest_path: Path, manifest_bytes: bytes) -> None:
@@ -97,9 +108,10 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
     if len(entries) > MAX_RULES:
         raise PolicyStoreError("Policy manifest exceeds the rule limit")
 
-    context_lines = []
-    sources = []
     today = date.today()
+
+    # ── Pass 1: collect all matching rules (validity + agency filter) ────────
+    candidate_rules = []
     for entry in entries:
         file_name = str(entry.get("file", ""))
         if Path(file_name).name != file_name or not file_name.endswith(".json"):
@@ -121,24 +133,57 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
             raise PolicyStoreError(f"Unsupported rule agency: {file_name}")
         source = rule.get("source") or {}
         _validate_source(source)
-        effective = date.fromisoformat(source["effective_date"])
-        if effective > today or rule_agency not in {agency, "GENERAL"}:
+        effective_from = date.fromisoformat(source["effective_date"])
+        # Skip rules not yet in force or not matching this agency
+        if effective_from > today or rule_agency not in {agency, "GENERAL"}:
             continue
+        # Skip expired rules (effective_to set and already passed)
+        effective_to_raw = source.get("effective_to")
+        if effective_to_raw:
+            if date.fromisoformat(effective_to_raw) < today:
+                continue
         statement = str(rule.get("statement", "")).strip()
         if not statement or len(statement) > 4_000:
             raise PolicyStoreError(f"Invalid policy statement: {file_name}")
         rule_id = str(rule.get("rule_id", file_name))
-        context_lines.append(
-            f"[RULE {rule_id}] {statement}\n"
+        supersedes = [str(r) for r in rule.get("supersedes", [])]
+        candidate_rules.append({
+            "rule_id": rule_id,
+            "statement": statement,
+            "effective_from": effective_from,
+            "source": source,
+            "supersedes": supersedes,
+        })
+
+    # ── Pass 2: remove superseded rules (V-H6) ───────────────────────────────
+    # If rule A declares supersedes=[B, C], exclude B and C from context.
+    superseded_ids: set = set()
+    for cr in candidate_rules:
+        superseded_ids.update(cr["supersedes"])
+    active_rules = [r for r in candidate_rules if r["rule_id"] not in superseded_ids]
+
+    # ── Pass 3: rank by most-recent effective date first (V-H6) ──────────────
+    active_rules.sort(key=lambda r: r["effective_from"], reverse=True)
+
+    # ── Pass 4: enforce token budget (V-H6) ───────────────────────────────────
+    context_lines = []
+    sources = []
+    budget_remaining = MAX_CONTEXT_CHARS
+    for cr in active_rules:
+        source = cr["source"]
+        line = (
+            f"[RULE {cr['rule_id']}] {cr['statement']}\n"
             f"Source: {source['title']} | {source['url']} | effective {source['effective_date']}"
         )
-        sources.append(
-            {
-                "rule_id": rule_id,
-                "title": source["title"],
-                "url": source["url"],
-                "effective_date": source["effective_date"],
-            }
-        )
+        if len(line) > budget_remaining:
+            break  # budget exhausted — drop lower-priority rules
+        context_lines.append(line)
+        sources.append({
+            "rule_id": cr["rule_id"],
+            "title": source["title"],
+            "url": source["url"],
+            "effective_date": source["effective_date"],
+        })
+        budget_remaining -= len(line)
 
     return "\n\n".join(context_lines), sources, manifest.get("generated_at")
