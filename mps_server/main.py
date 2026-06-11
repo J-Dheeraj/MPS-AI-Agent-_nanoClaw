@@ -60,6 +60,12 @@ GENERATION_DURATION = Histogram(
     buckets=(5, 10, 20, 40, 60, 90, 120, 180, 300),
 )
 # V-M15: audit chain verification status (1=ok, 0=broken)
+VETTER_EDIT_SIMILARITY = Histogram(
+    "mps_vetter_edit_similarity",
+    "Similarity between generated draft and vetter-approved final text "
+    "(1.0 = unchanged)",
+    buckets=(0.2, 0.4, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0),
+)
 AUDIT_CHAIN_STATUS = Gauge(
     "mps_audit_chain_status",
     "1 when the last audit chain verification passed, 0 otherwise",

@@ -237,6 +237,22 @@ def vetter_submit(
             },
         )
     transition(case, "pending_mp")    # 409 if not in a vettable state
+    # Edit-distance analytics (V4 nice-to-have): how much did the vetter
+    # change the draft? 1.0 = untouched, 0.0 = fully rewritten. Stored in
+    # generation_meta and exported as a histogram for ROI evidence.
+    if letter.draft_content:
+        import difflib
+        import json as _json
+        similarity = difflib.SequenceMatcher(
+            None, letter.draft_content, body.final_content).ratio()
+        try:
+            meta = _json.loads(letter.generation_meta or "{}")
+        except ValueError:
+            meta = {}
+        meta["vetter_edit_similarity"] = round(similarity, 4)
+        letter.generation_meta = _json.dumps(meta)
+        from ..main import VETTER_EDIT_SIMILARITY
+        VETTER_EDIT_SIMILARITY.observe(similarity)
     # Save vetter's final edited text and freeze
     letter.final_content = body.final_content
     letter.status = "vetted"
