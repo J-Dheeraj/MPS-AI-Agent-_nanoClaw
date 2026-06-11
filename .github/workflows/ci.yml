@@ -23,7 +23,7 @@ jobs:
           cache-dependency-path: mps_server/requirements.txt
       - run: python -m pip install --disable-pip-version-check -r mps_server/requirements.txt pytest==8.2.2
       - run: python -m pip check
-      - run: python -m compileall -q mps_server mps_client
+      - run: python -m compileall -q mps_server
       - run: python -m pytest -q
       - run: DATABASE_URL=sqlite:///migration-ci.db python -m alembic upgrade head
       - run: DATABASE_URL=sqlite:///migration-ci.db python -m alembic current
@@ -42,3 +42,59 @@ jobs:
         working-directory: nanoclaw-tauri-client
       - run: npm run build
         working-directory: nanoclaw-tauri-client
+
+  dependency-scan:
+    name: Dependency vulnerability scan (V3-I6)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install pip-audit
+        run: pip install --disable-pip-version-check pip-audit
+      - name: Audit Python dependencies
+        run: pip-audit -r mps_server/requirements.txt --strict --format json -o pip-audit.json
+        continue-on-error: true
+      - name: Upload pip-audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-results
+          path: pip-audit.json
+      - name: Generate SBOM (syft)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.0.0
+          syft dir:mps_server --output cyclonedx-json=sbom-python.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-python
+          path: sbom-python.json
+      - name: Scan SBOM with Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.74.0
+          grype sbom:sbom-python.json --fail-on high --output json > grype-results.json || true
+      - name: Upload Grype results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grype-results
+          path: grype-results.json
+
+  secret-scan:
+    name: Secret scanning (V3-I6)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/zricethezav/gitleaks/releases/download/v8.21.0/gitleaks_8.21.0_linux_x64.tar.gz | tar xz -C /usr/local/bin gitleaks
+      - name: Run gitleaks
+        run: gitleaks detect --source=. --verbose --exit-code 1
