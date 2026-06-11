@@ -12,6 +12,7 @@ Ollama client with a real priority-ordered LLM request queue.
 import asyncio
 import itertools
 import json
+import re
 import os
 from enum import IntEnum
 from typing import AsyncGenerator
@@ -212,6 +213,19 @@ Cite the relevant RULE identifier for every policy claim.
 Keep answers concise and practical."""
 
 
+# Untrusted text could contain literal delimiter tags to break out of its
+# UNTRUSTED_CASE_DATA block or forge an APPROVED_POLICY_CONTEXT block.
+# Strip any such tag before assembly (V3-I5).
+_DELIMITER_TAG = re.compile(
+    r"</?\s*(?:UNTRUSTED_CASE_DATA|APPROVED_POLICY_CONTEXT)[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def _neutralise(text: str) -> str:
+    return _DELIMITER_TAG.sub("", text or "")
+
+
 def build_draft_messages(case_type: str, agency: str, notes: str,
                           is_reappeal: bool = False,
                           previous_letter: str = None,
@@ -221,7 +235,7 @@ def build_draft_messages(case_type: str, agency: str, notes: str,
     user_content = (
         f"Case type: {case_type}\nAgency: {agency}\n\n"
         "<UNTRUSTED_CASE_DATA>\n"
-        f"{notes}\n"
+        f"{_neutralise(notes)}\n"
         "</UNTRUSTED_CASE_DATA>"
     )
     # Previous letters and rejection text are untrusted: they were produced by
@@ -230,13 +244,13 @@ def build_draft_messages(case_type: str, agency: str, notes: str,
     if is_reappeal and previous_letter:
         user_content += (
             "\n\n<UNTRUSTED_CASE_DATA label='previous_letter'>\n"
-            f"{previous_letter}\n"
+            f"{_neutralise(previous_letter)}\n"
             "</UNTRUSTED_CASE_DATA>"
         )
     if is_reappeal and rejection_reason:
         user_content += (
             "\n\n<UNTRUSTED_CASE_DATA label='rejection_reason'>\n"
-            f"{rejection_reason}\n"
+            f"{_neutralise(rejection_reason)}\n"
             "</UNTRUSTED_CASE_DATA>"
         )
     if policy_context:
