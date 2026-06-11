@@ -17,6 +17,44 @@ MAX_RULE_BYTES = 65_536
 # Override with POLICY_CONTEXT_BUDGET env var (characters).
 MAX_CONTEXT_CHARS = int(__import__('os').getenv('POLICY_CONTEXT_BUDGET', '16000'))
 
+# In-process TTL cache for policy context (V-M16). Cache key is
+# (agency, manifest_mtime_ns) so any file edit invalidates the entry.
+# TTL guards against very long-lived processes that would otherwise serve
+# stale rules if the manifest file is swapped without a server restart.
+_POLICY_CACHE_TTL_SECONDS = int(os.getenv('POLICY_CACHE_TTL', '300'))
+
+import time as _time
+import threading as _threading
+
+_policy_cache: dict = {}
+_policy_cache_lock = _threading.Lock()
+
+
+def _cache_key(agency: str, manifest_path: 'Path') -> tuple:
+    try:
+        mtime = manifest_path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0
+    # Include the absolute path so different policy directories get separate
+    # cache entries (prevents test cross-contamination and supports hot reload).
+    return (agency.upper(), str(manifest_path.resolve()), mtime)
+
+
+def _get_cached(key: tuple):
+    with _policy_cache_lock:
+        entry = _policy_cache.get(key)
+        if entry and (_time.monotonic() - entry["ts"]) < _POLICY_CACHE_TTL_SECONDS:
+            return entry["value"]
+        if entry:
+            del _policy_cache[key]
+    return None
+
+
+def _set_cached(key: tuple, value) -> None:
+    with _policy_cache_lock:
+        _policy_cache[key] = {"ts": _time.monotonic(), "value": value}
+
+
 
 class PolicyStoreError(RuntimeError):
     pass
@@ -97,6 +135,12 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
 
     root = _policy_dir()
     manifest_path = root / "manifest.json"
+
+    # Cache hit: skip file I/O and signature re-verification (V-M16).
+    key = _cache_key(agency, manifest_path)
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
     if not manifest_path.is_file():
         return "", [], None
     manifest_bytes = manifest_path.read_bytes()
@@ -186,4 +230,6 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
         })
         budget_remaining -= len(line)
 
-    return "\n\n".join(context_lines), sources, manifest.get("generated_at")
+    result = "\n\n".join(context_lines), sources, manifest.get("generated_at")
+    _set_cached(key, result)
+    return result
