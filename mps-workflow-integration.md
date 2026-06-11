@@ -1,3 +1,11 @@
+> # ⚠️ SUPERSEDED — DO NOT DEPLOY FROM THIS DOCUMENT
+>
+> This document describes an **early WhatsApp/Telegram multi-channel design that is NOT the supported architecture** and must not be deployed. Cloud messaging channels are disabled for constituent data: Telegram/WhatsApp would route constituent information off-premises, which the privacy model forbids.
+>
+> The canonical, supported architecture is the **FastAPI service + Tauri desktop client + local web UI**, documented in [`docs/PRODUCTION_ARCHITECTURE.md`](docs/PRODUCTION_ARCHITECTURE.md). Use that document. This file is retained only for historical context.
+
+---
+
 # MPS Workflow Integration
 
 ## How NanoClaw works alongside the MPS case management platform

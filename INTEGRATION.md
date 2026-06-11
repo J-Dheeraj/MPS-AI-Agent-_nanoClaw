@@ -1,5 +1,8 @@
 # INTEGRATION.md — nanoClaw + Hermes Combined System
 
+> **Correction (2026-06-11):** Hermes does **not** auto-apply skill changes. The pipeline is deterministic and human-promoted: it generates *proposals* from anonymised approved corrections, a human approves each one in the Hermes Review App, and promotion produces an **Ed25519-signed policy manifest** that NanoClaw verifies fail-closed. References below to auto-running or auto-generating `skills/auto/` describe an earlier design and are retained only for context.
+
+
 This document describes how the two repos work together for Singapore MPS (Meet-the-People Session) AI assistance.
 
 ---

@@ -6,7 +6,7 @@ A self-hosted AI agent purpose-built for Singapore Members of Parliament conduct
 
 Volunteers and vetters use a **cross-platform Tauri v2 desktop app** to draft and approve formal appeal letters with AI assistance. All AI inference runs fully **on-premises via Ollama** — no Anthropic API key, no cloud calls, no constituent data ever leaves the LAN.
 
-> **Companion repo:** [MPS-AI-Agent-Hermes](https://github.com/J-Dheeraj/MPS-AI-Agent-Hermes) runs offline weekly to improve agent skill files via GEPA (Generalised Experience-driven Policy Adaptation). It also ships a **Hermes Review App** — a Tauri desktop tool for the human review step.
+> **Companion repo:** [MPS-AI-Agent-Hermes](https://github.com/J-Dheeraj/MPS-AI-Agent-Hermes) proposes policy-skill improvements from anonymised, approved corrections. The pipeline is **deterministic and human-promoted**: it does not auto-apply changes or let a model mutate active policy. A human approves each proposal in the **Hermes Review App** (Tauri desktop), and promotion produces an **Ed25519-signed policy manifest** that NanoClaw verifies fail-closed before trusting any rule.
 
 ---
 
@@ -147,8 +147,8 @@ MPS platform auto-sends approved letters to agencies.
 | Tauri v2 (not browser) | Native desktop app — works on old laptops, no browser overhead |
 | Ollama (not Anthropic API) | Fully air-gapped — zero cloud dependency, no API key risk |
 | FastAPI + SQLite | Simple, lightweight, runs on a RM400 mini-PC |
-| JWT in Rust encrypted store | Token never touches localStorage or JS memory |
-| Append-only audit log | Tamper-evident — every action is hash-chained |
+| JWT in memory only | Token is held in JS memory for the session and never written to disk; it is cleared on logout/exit. (It is NOT persisted in an encrypted store — persistence was removed to avoid a plaintext token on disk.) |
+| Tamper-evident audit log | Every action is SHA-256 hash-chained; the ORM blocks UPDATE/DELETE and a verification command detects tampering. (DB-role revocation of UPDATE/DELETE and external anchoring are recommended additions — see governance pack.) |
 | NRIC masked at entry | Full NRIC never persisted anywhere in the system |
 | Frozen letters | Vetter's final text is immutable — what MP sees is exactly what vetter approved |
 
@@ -167,7 +167,7 @@ REST + WebSocket API. Runs on the central server. Binds to `127.0.0.1:8000` by d
 | `main.py` | FastAPI app entry point. Auto-creates DB tables on startup. Seeds `admin/admin123` default account (change immediately). |
 | `database.py` | SQLAlchemy models: `User`, `Session`, `Resident`, `Case`, `Letter`, `FeedbackEntry`, `AuditLog`. All relationships defined here. |
 | `auth.py` | JWT tokens (60-min expiry), bcrypt password hashing, RBAC decorator (`require_role`), account lockout after 5 failed attempts. |
-| `services/audit.py` | Append-only audit log. Every action writes a new row with a SHA-256 hash of the previous row — tamper-evident chain. No UPDATE or DELETE on audit rows. |
+| `services/audit.py` | Tamper-evident audit log. Every action writes a new row with a SHA-256 hash of the previous row, serialised with an advisory lock. The ORM blocks UPDATE/DELETE on audit rows and `verify_audit` detects tampering; revoking UPDATE/DELETE at the database-role level is a recommended hardening step. |
 | `services/ollama_client.py` | LLM queue (max 3 concurrent requests), async streaming via Ollama HTTP API. Three system prompts: LETTER (standard draft), REAPPEAL (follow-up to previous rejection), QA (quality check). |
 | `routers/auth_router.py` | `POST /auth/login` (OAuth2 form), `/auth/logout`, `/auth/register` (admin only). |
 | `routers/sessions_router.py` | `POST /sessions/open`, `POST /sessions/close`. One active session at a time. |
