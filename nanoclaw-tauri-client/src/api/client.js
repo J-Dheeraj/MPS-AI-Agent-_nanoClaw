@@ -64,6 +64,27 @@ function safeJson(text) {
 
 // ---- auth ----------------------------------------------------------------
 
+// ---- MFA management (V4-I1) ----------------------------------------------
+// Two-phase enrolment per auth_router.py (V3-C1): enroll -> pending secret,
+// activate -> enforced + recovery codes shown once.
+
+export async function mfaEnroll() {
+  return request("/auth/mfa/enroll", { method: "POST" });
+}
+
+export async function mfaActivate(code) {
+  return request("/auth/mfa/activate", { method: "POST", body: { code } });
+}
+
+export async function mfaDisable(code) {
+  return request("/auth/mfa/disable", { method: "POST", body: { code } });
+}
+
+export async function mfaRegenerateRecoveryCodes(code) {
+  return request("/auth/mfa/recovery-codes", { method: "POST", body: { code } });
+}
+
+
 /**
  * POST /auth/login -- OAuth2 password form (matches FastAPI's OAuth2PasswordRequestForm)
  * Returns { access_token, token_type, role, ... } per auth_router.py.

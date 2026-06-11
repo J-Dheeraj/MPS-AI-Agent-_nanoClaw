@@ -14,6 +14,7 @@ import { openCaseFormDialog } from "./caseForm";
 import { renderLetterView } from "./letterView";
 import { renderVetterCaseReview } from "./vetterView";
 import { renderFeedback } from "./feedbackView";
+import { openSecurityDialog } from "./securityDialog";
 
 const STATUS_FILTERS = ["all", "new", "assigned", "drafted", "pending_mp", "returned", "approved", "sent"];
 
@@ -28,6 +29,7 @@ export async function renderMainWindow(root, { onLoggedOut }) {
       <div class="toolbar">
         <strong>${role === "volunteer" ? "My cases" : role === "vetter" ? "Vetting queue" : "All cases"}</strong>
         <div class="spacer"></div>
+        <button id="security-btn" title="Two-factor authentication">Security</button>
         <button id="logout-btn" title="Sign out">Sign out</button>
       </div>
       <div style="padding:8px 12px">
@@ -41,6 +43,8 @@ export async function renderMainWindow(root, { onLoggedOut }) {
     </main>
   `;
   root.appendChild(shell);
+
+  shell.querySelector("#security-btn").addEventListener("click", () => openSecurityDialog());
 
   shell.querySelector("#logout-btn").addEventListener("click", async () => {
     if (!confirm("Sign out?")) return;
