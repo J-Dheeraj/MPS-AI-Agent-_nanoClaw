@@ -100,6 +100,21 @@ _POLICY_CLAIM_KEYWORDS = re.compile(
 )
 _MONEY = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?")
 _PERCENT = re.compile(r"\d+(?:\.\d+)?\s?%")
+# V3-C5: age and duration figures, e.g. "aged 55", "within 21 days", "5 years".
+# Normalised to digits+unit (aged N -> "Nyears") so "aged 55" grounds
+# "55 years" and vice versa.
+_AGE_DURATION = re.compile(
+    r"(?:\b(?:aged?|age of)\s+(\d{1,3})\b|\b(\d{1,3})\s+(years?|months?|weeks?|days?)\b)",
+    re.IGNORECASE,
+)
+
+
+def _norm_age_duration(m: "re.Match") -> str:
+    if m.group(1):  # "aged N" form — treat as years
+        return f"{m.group(1)}years"
+    unit = m.group(3).lower().rstrip("s") + "s"
+    return f"{m.group(2)}{unit}"
+
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
@@ -113,6 +128,8 @@ def _grounded_figures(policy_context: str) -> set:
         figures.add(_norm_figure(m.group()))
     for m in _PERCENT.finditer(policy_context):
         figures.add(_norm_figure(m.group()))
+    for m in _AGE_DURATION.finditer(policy_context):
+        figures.add(_norm_age_duration(m))
     return figures
 
 
@@ -132,22 +149,23 @@ def check_factual_support(text: str, policy_context: str) -> list:
     for sentence in _SENTENCE_SPLIT.split(text):
         if not _POLICY_CLAIM_KEYWORDS.search(sentence):
             continue
-        for pattern in (_MONEY, _PERCENT):
-            for m in pattern.finditer(sentence):
-                fig = _norm_figure(m.group())
+        matches = [(_norm_figure(m.group()), m.group()) for pat in (_MONEY, _PERCENT)
+                   for m in pat.finditer(sentence)]
+        matches += [(_norm_age_duration(m), m.group()) for m in _AGE_DURATION.finditer(sentence)]
+        for fig, raw in matches:
                 if fig in grounded or fig in seen:
                     continue
                 seen.add(fig)
                 if have_context:
                     warnings.append(Warning(
                         "block", "unsupported_policy_figure",
-                        f"Letter states policy figure '{m.group().strip()}' that is not "
+                        f"Letter states policy figure '{raw.strip()}' that is not "
                         f"in the approved policy context for this case. Remove it or "
                         f"cite an approved policy rule."))
                 else:
                     warnings.append(Warning(
                         "warn", "unverifiable_policy_figure",
-                        f"Letter states policy figure '{m.group().strip()}' but no approved "
+                        f"Letter states policy figure '{raw.strip()}' but no approved "
                         f"policy context was available to verify it."))
     return warnings
 
