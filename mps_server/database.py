@@ -117,6 +117,10 @@ class Letter(Base):
     vetted_at      = Column(DateTime, nullable=True)
     approved_at    = Column(DateTime, nullable=True)
     is_frozen      = Column(Boolean, default=False)
+    # Generation provenance (JSON): model, prompt_version, policy_version,
+    # validator_version, policy_rule_ids, grounding result. Persisted before a
+    # draft reaches a vetter so every letter is traceable (V-C2).
+    generation_meta = Column(Text, nullable=True)
     case = relationship("Case", back_populates="letters")
 
 class FeedbackEntry(Base):

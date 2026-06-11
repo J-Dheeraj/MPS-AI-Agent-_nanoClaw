@@ -1,4 +1,6 @@
 import asyncio
+import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session as DBSession
@@ -11,9 +13,15 @@ from ..services.ollama_client import (
     build_draft_messages,
     build_qa_messages,
     llm_queue,
+    OLLAMA_MODEL,
+    PROMPT_VERSION,
 )
 from ..services.policy_store import PolicyStoreError, load_policy_context
-from ..services.validator import validate_letter
+from ..services.validator import (
+    validate_letter,
+    validate_letter_grounded,
+    VALIDATOR_VERSION,
+)
 
 router = APIRouter(prefix="/letters", tags=["letters"])
 
@@ -74,8 +82,12 @@ async def _safe_ws_close(websocket: WebSocket, code: int = 1000) -> None:
         pass
 
 
-def _blocking_findings(content: str):
-    return [finding for finding in validate_letter(content) if finding.severity == "block"]
+def _blocking_findings(content: str, policy_context: str = ""):
+    return [
+        finding
+        for finding in validate_letter_grounded(content, policy_context)
+        if finding.severity == "block"
+    ]
 
 
 @router.get("/{letter_id}")
@@ -235,7 +247,7 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
         async for chunk in llm_queue.run(messages, priority=priority):
             full_text += chunk
 
-        findings = validate_letter(full_text)
+        findings = validate_letter_grounded(full_text, policy_context)
         blocking = [finding for finding in findings if finding.severity == "block"]
         if blocking:
             transition(case, "drafted")
@@ -260,6 +272,18 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
         # mid-stream, a refresh retrieves the completed draft instead of
         # regenerating or leaving the case stranded.
         letter.draft_content = full_text
+        # Generation provenance (V-C2): every letter is traceable to the exact
+        # model, prompt, policy snapshot and validator that produced it, and
+        # records whether any non-blocking grounding warnings remained.
+        letter.generation_meta = json.dumps({
+            "model": OLLAMA_MODEL,
+            "prompt_version": PROMPT_VERSION,
+            "policy_version": policy_version,
+            "policy_rule_ids": [src.get("rule_id") for src in policy_sources],
+            "validator_version": VALIDATOR_VERSION,
+            "warning_codes": [finding.code for finding in findings],
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        })
         transition(case, "drafted")
         db.commit()
         log_event(

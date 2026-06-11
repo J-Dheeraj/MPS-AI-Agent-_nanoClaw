@@ -20,6 +20,9 @@ import httpx
 
 OLLAMA_URL     = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+# Bump whenever LETTER_SYSTEM / REAPPEAL_SYSTEM changes so generated letters
+# can be traced to the exact prompt that produced them (V-C2 provenance).
+PROMPT_VERSION = "2026-06-11"
 MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "3"))
 MAX_QUEUE      = int(os.getenv("LLM_MAX_QUEUE", "20"))    # load-shedding bound
 REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "120"))

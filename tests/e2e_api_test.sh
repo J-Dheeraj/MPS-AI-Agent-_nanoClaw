@@ -99,7 +99,7 @@ FID=$(curl -s -X POST $B/feedback/ -H "$VH" -H 'Content-Type: application/json' 
   -d '{"agency_code":"CPF","incorrect_claim":"BRS is $99,400","correct_answer":"BRS for 2026 is $102,900"}' \
   | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("id",""))')
 [ -n "$FID" ] && ok "feedback logged (no case_id, anonymised)" || bad "feedback log"
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/feedback/$FID/validate" -H "$TH" -H 'Content-Type: application/json' -d '{"action":"approve"}')
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/feedback/$FID/validate" -H "$TH" -H 'Content-Type: application/json' -d '{"action":"approve","source_title":"HDB policy page","source_url":"https://www.hdb.gov.sg/policy","effective_date":"2026-01-01"}')
 [ "$CODE" = "200" ] && ok "feedback approve" || bad "feedback approve -> $CODE"
 AN=$(curl -s "$B/feedback/approved" -H "$TH" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
 [ "$AN" = "1" ] && ok "GET /feedback/approved (Hermes feed)" || bad "approved feed ($AN)"

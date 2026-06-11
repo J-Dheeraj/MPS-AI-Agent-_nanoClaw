@@ -209,34 +209,34 @@ def vetter_submit(
         raise HTTPException(400, "No draft letter found for this case")
     if not body.final_content.strip() or len(body.final_content) > 20_000:
         raise HTTPException(422, "Final letter must be between 1 and 20000 characters")
-    from ..services.validator import validate_letter
-    blocking = [
+    # Re-run blocking privacy + factual-support checks on the vetter's FINAL
+    # text (V-C2 + V-9). This is the last gate before the letter is frozen and
+    # sent to the MP. It re-loads the approved policy context for the case so a
+    # hallucinated or stale policy threshold cannot be frozen, and it stops a
+    # vetter editing in a full NRIC between draft generation and submission.
+    from ..services.validator import validate_letter_grounded
+    from ..services.policy_store import load_policy_context, PolicyStoreError
+    try:
+        policy_context, _sources, _version = load_policy_context(case.agency)
+    except PolicyStoreError:
+        raise HTTPException(503, "Approved policy store failed integrity checks")
+    final_blocks = [
         finding
-        for finding in validate_letter(body.final_content)
+        for finding in validate_letter_grounded(body.final_content, policy_context)
         if finding.severity == "block"
     ]
-    if blocking:
+    if final_blocks:
         raise HTTPException(
             422,
             detail={
-                "message": "Final letter failed mandatory safety checks",
+                "message": "Final letter failed mandatory safety checks — submission rejected",
                 "findings": [
                     {"code": finding.code, "message": finding.message}
-                    for finding in blocking
+                    for finding in final_blocks
                 ],
             },
         )
     transition(case, "pending_mp")    # 409 if not in a vettable state
-    # Re-run blocking privacy/content checks on the vetter's final text.
-    # This prevents a vetter from editing in a full NRIC (or other blocked content)
-    # between the draft-generation validation pass and the final submission.
-    from ..services.validator import validate_letter
-    final_blocks = [w for w in validate_letter(body.final_content) if w.severity == "block"]
-    if final_blocks:
-        raise HTTPException(422, {
-            "detail": "Final letter failed safety check — submission rejected",
-            "blocks": [w.code for w in final_blocks],
-        })
     # Save vetter's final edited text and freeze
     letter.final_content = body.final_content
     letter.status = "vetted"

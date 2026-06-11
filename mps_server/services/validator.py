@@ -30,6 +30,8 @@ _BLAME = [r"\bwrongly (?:rejected|denied|decided)\b", r"\byour error\b",
 
 MAX_WORDS = 600   # ~one page
 
+VALIDATOR_VERSION = "2026-06-11"
+
 
 @dataclass
 class Warning:
@@ -77,6 +79,83 @@ def validate_letter(text: str) -> list:
             f"Letter is {word_count} words (>{MAX_WORDS}). Aim for one page."))
 
     return warnings
+
+
+# ── Factual-support / grounding check (V-C2) ─────────────────────────────────
+# A generated letter must not assert a policy threshold figure that is not
+# present in the approved policy context retrieved for the case. This catches
+# the harmful case the review named: a hallucinated or stale eligibility
+# threshold (e.g. an income ceiling) that would otherwise pass privacy checks
+# and be frozen. It is deliberately scoped to figures that appear *as policy
+# claims* — i.e. near eligibility/threshold language — so a resident's own
+# circumstance figure (their income, flat number, household size) is not
+# flagged. It is deterministic: no second model call.
+
+# A sentence is treated as a policy claim only if it contains threshold language.
+_POLICY_CLAIM_KEYWORDS = re.compile(
+    r"\b(threshold|eligib\w*|qualif\w*|income (?:ceiling|limit|cap)|"
+    r"ceiling|cap|caps|capped|maximum|up to|must not exceed|cannot exceed|"
+    r"not exceed|criteria|quota|subsid\w*|tier|limit)\b",
+    re.IGNORECASE,
+)
+_MONEY = re.compile(r"\$\s?\d[\d,]*(?:\.\d{1,2})?")
+_PERCENT = re.compile(r"\d+(?:\.\d+)?\s?%")
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _norm_figure(raw: str) -> str:
+    return re.sub(r"[\s,$]", "", raw).rstrip(".")
+
+
+def _grounded_figures(policy_context: str) -> set:
+    figures = set()
+    for m in _MONEY.finditer(policy_context):
+        figures.add(_norm_figure(m.group()))
+    for m in _PERCENT.finditer(policy_context):
+        figures.add(_norm_figure(m.group()))
+    return figures
+
+
+def check_factual_support(text: str, policy_context: str) -> list:
+    """Flag policy-threshold figures in the letter not grounded in policy_context.
+
+    Returns a list[Warning]. When policy_context is non-empty an ungrounded
+    threshold figure is a 'block'; when no policy context was available the
+    same figure is an unverifiable 'warn' (we cannot prove or disprove it).
+    """
+    if not text or not text.strip():
+        return []
+    grounded = _grounded_figures(policy_context or "")
+    have_context = bool((policy_context or "").strip())
+    warnings = []
+    seen = set()
+    for sentence in _SENTENCE_SPLIT.split(text):
+        if not _POLICY_CLAIM_KEYWORDS.search(sentence):
+            continue
+        for pattern in (_MONEY, _PERCENT):
+            for m in pattern.finditer(sentence):
+                fig = _norm_figure(m.group())
+                if fig in grounded or fig in seen:
+                    continue
+                seen.add(fig)
+                if have_context:
+                    warnings.append(Warning(
+                        "block", "unsupported_policy_figure",
+                        f"Letter states policy figure '{m.group().strip()}' that is not "
+                        f"in the approved policy context for this case. Remove it or "
+                        f"cite an approved policy rule."))
+                else:
+                    warnings.append(Warning(
+                        "warn", "unverifiable_policy_figure",
+                        f"Letter states policy figure '{m.group().strip()}' but no approved "
+                        f"policy context was available to verify it."))
+    return warnings
+
+
+def validate_letter_grounded(text: str, policy_context: str = "") -> list:
+    """validate_letter + factual-support check. Use this at draft and at the
+    final vetter-submit gate so a hallucinated threshold cannot be frozen."""
+    return validate_letter(text) + check_factual_support(text, policy_context)
 
 
 if __name__ == "__main__":
