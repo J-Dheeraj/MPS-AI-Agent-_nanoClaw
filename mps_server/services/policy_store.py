@@ -1,5 +1,6 @@
 """Load cryptographically manifested, human-approved policy rules."""
 
+import base64
 import hashlib
 import json
 import os
@@ -38,6 +39,46 @@ def _validate_source(source: dict) -> None:
         raise PolicyStoreError("Policy effective date is invalid") from exc
 
 
+def _verify_manifest_signature(manifest_path: Path, manifest_bytes: bytes) -> None:
+    """Fail-closed Ed25519 verification of the policy manifest.
+
+    When POLICY_PUBLIC_KEY is configured, the manifest MUST carry a valid
+    signature (manifest.json.sig) from the trusted release key. This is the
+    control that stops a manifest forged by someone with only filesystem
+    access: recomputing the hashes is not enough — they would also need the
+    managed private signing key. If no public key is configured the check is
+    skipped (development only); production startup requires it to be set.
+    """
+    public_key_path = os.getenv("POLICY_PUBLIC_KEY", "").strip()
+    if not public_key_path:
+        return  # dev mode: signing not enforced
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.exceptions import InvalidSignature
+
+    try:
+        public_key = serialization.load_pem_public_key(Path(public_key_path).read_bytes())
+    except Exception as exc:  # noqa: BLE001 - surfaced as a policy error
+        raise PolicyStoreError("POLICY_PUBLIC_KEY could not be loaded") from exc
+    if not isinstance(public_key, Ed25519PublicKey):
+        raise PolicyStoreError("POLICY_PUBLIC_KEY must be an Ed25519 public key")
+
+    sig_path = manifest_path.with_name("manifest.json.sig")
+    if not sig_path.is_file():
+        raise PolicyStoreError("Policy manifest is not signed (manifest.json.sig missing)")
+    sidecar = json.loads(sig_path.read_text(encoding="utf-8"))
+    if sidecar.get("schema_version") != 1 or sidecar.get("algorithm") != "ed25519":
+        raise PolicyStoreError("Unsupported manifest signature format")
+    signature = sidecar.get("signature")
+    if not isinstance(signature, str) or not signature:
+        raise PolicyStoreError("Manifest signature is missing")
+    try:
+        public_key.verify(base64.b64decode(signature), manifest_bytes)
+    except (InvalidSignature, ValueError, TypeError) as exc:
+        raise PolicyStoreError("Manifest signature failed verification") from exc
+
+
 def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
     agency = agency.strip().upper()
     if agency not in VALID_AGENCIES:
@@ -47,7 +88,9 @@ def load_policy_context(agency: str) -> tuple[str, list[dict], str | None]:
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file():
         return "", [], None
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_bytes = manifest_path.read_bytes()
+    _verify_manifest_signature(manifest_path, manifest_bytes)
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
     entries = manifest.get("rules")
     if manifest.get("schema_version") != 1 or not isinstance(entries, list):
         raise PolicyStoreError("Unsupported policy manifest")

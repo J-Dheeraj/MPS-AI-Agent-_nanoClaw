@@ -79,6 +79,14 @@ def _validate_production_config() -> None:
     )
     if not __import__("pathlib").Path(policy_dir, "manifest.json").is_file():
         raise RuntimeError("Production requires a manifested active policy store")
+    # Policy manifests must be cryptographically signed by the managed release
+    # key in production. Without POLICY_PUBLIC_KEY the manifest signature is not
+    # verified and a forged manifest with recomputed hashes would be trusted.
+    public_key = os.getenv("POLICY_PUBLIC_KEY", "").strip()
+    if not public_key or not __import__("pathlib").Path(public_key).is_file():
+        raise RuntimeError("Production requires POLICY_PUBLIC_KEY pointing at the release public key")
+    if not __import__("pathlib").Path(policy_dir, "manifest.json.sig").is_file():
+        raise RuntimeError("Production policy manifest must be signed (manifest.json.sig)")
 
 # ── Database init ─────────────────────────────────────────────────────────────
 from .database import Base, engine, SessionLocal

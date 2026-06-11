@@ -19,3 +19,8 @@ __pycache__/
 backups/
 deploy/secrets/
 .env.production
+
+# Policy release signing keys — never commit private keys
+*.pem
+policy-signing-key*
+REVIEWER_REGISTRY*.json

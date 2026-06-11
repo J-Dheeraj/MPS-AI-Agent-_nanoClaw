@@ -29,3 +29,4 @@ pydantic-settings==2.2.1
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 pyotp==2.9.0                      # TOTP two-factor (future)
+cryptography>=3.4.8           # Ed25519 policy-manifest signature verification
