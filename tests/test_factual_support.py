@@ -90,3 +90,34 @@ def test_ungrounded_years_claim_blocks():
 def test_plain_number_outside_claim_sentence_not_flagged():
     text = 'The resident has lived there for 12 years and has 3 children.'
     assert check_factual_support(text, CTX_AGE) == []
+
+
+# ── V4-I3: rule-level claim citations ────────────────────────────────────────
+
+def test_citation_of_unknown_rule_blocks():
+    from mps_server.services.validator import check_claim_citations
+    out = check_claim_citations(
+        "The income ceiling is $1,500 [RULE made_up_rule].", CTX)
+    assert ("block", "unknown_rule_citation") in codes(out)
+
+
+def test_citation_of_approved_rule_is_clean():
+    from mps_server.services.validator import check_claim_citations
+    out = check_claim_citations(
+        "The income ceiling is $1,500 [RULE hdb_rental].", CTX)
+    assert out == []
+
+
+def test_uncited_policy_claim_warns():
+    from mps_server.services.validator import check_claim_citations
+    out = check_claim_citations(
+        "The eligibility threshold is $1,500 for this scheme.", CTX)
+    assert ("warn", "uncited_policy_claim") in codes(out)
+
+
+def test_non_policy_sentence_needs_no_citation():
+    from mps_server.services.validator import check_claim_citations
+    out = check_claim_citations(
+        "The resident has lived in the flat since 2010 with her two children.",
+        CTX)
+    assert out == []

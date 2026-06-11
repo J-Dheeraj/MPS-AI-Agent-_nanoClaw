@@ -23,7 +23,7 @@ OLLAMA_URL     = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL   = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 # Bump whenever LETTER_SYSTEM / REAPPEAL_SYSTEM changes so generated letters
 # can be traced to the exact prompt that produced them (V-C2 provenance).
-PROMPT_VERSION = "2026-06-11"
+PROMPT_VERSION = "2026-06-12"
 MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "3"))
 MAX_QUEUE      = int(os.getenv("LLM_MAX_QUEUE", "20"))    # load-shedding bound
 REQUEST_TIMEOUT = float(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
@@ -184,6 +184,9 @@ Tone rules:
 - Mask NRIC to last 3 chars + letter (e.g. S****567A)
 - Do not fabricate policy details, agency addresses, or reference numbers
 - State policy facts only when they appear in APPROVED_POLICY_CONTEXT
+- When you state a policy fact, end that sentence with its citation in the
+  exact form [RULE rule_id], copying rule_id from APPROVED_POLICY_CONTEXT.
+  Never cite a rule that is not in APPROVED_POLICY_CONTEXT.
 
 Output the letter only. No commentary before or after."""
 

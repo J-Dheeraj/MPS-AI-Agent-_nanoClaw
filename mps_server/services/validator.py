@@ -170,10 +170,43 @@ def check_factual_support(text: str, policy_context: str) -> list:
     return warnings
 
 
+_RULE_CITATION = re.compile(r"\[RULE\s+([A-Za-z0-9_-]+)\]")
+
+
+def check_claim_citations(text: str, policy_context: str) -> list:
+    """Rule-level provenance for policy claims (V4-I3).
+
+    - A citation to a rule id that is not in the approved context is a
+      'block': it is fabricated provenance.
+    - A policy-claim sentence (threshold language) with no citation is a
+      'warn' so the vetter checks it; blocking would reject legitimate
+      phrasing too aggressively.
+    """
+    if not text or not text.strip():
+        return []
+    known_ids = set(_RULE_CITATION.findall(policy_context or ""))
+    warnings = []
+    for m in _RULE_CITATION.finditer(text):
+        if m.group(1) not in known_ids:
+            warnings.append(Warning(
+                "block", "unknown_rule_citation",
+                f"Letter cites [RULE {m.group(1)}] which is not in the approved "
+                f"policy context — fabricated provenance."))
+    if (policy_context or "").strip():
+        for sentence in _SENTENCE_SPLIT.split(text):
+            if _POLICY_CLAIM_KEYWORDS.search(sentence) and not _RULE_CITATION.search(sentence):
+                warnings.append(Warning(
+                    "warn", "uncited_policy_claim",
+                    f"Policy claim has no [RULE ...] citation: "
+                    f"'{sentence.strip()[:80]}'"))
+    return warnings
+
+
 def validate_letter_grounded(text: str, policy_context: str = "") -> list:
     """validate_letter + factual-support check. Use this at draft and at the
     final vetter-submit gate so a hallucinated threshold cannot be frozen."""
-    return validate_letter(text) + check_factual_support(text, policy_context)
+    return (validate_letter(text) + check_factual_support(text, policy_context)
+            + check_claim_citations(text, policy_context))
 
 
 if __name__ == "__main__":
