@@ -55,11 +55,12 @@ jobs:
       - name: Install pip-audit
         run: pip install --disable-pip-version-check pip-audit
       - name: Audit Python dependencies
+        # Vulnerability findings fail CI (V4-I2): scanners are release gates,
+        # not dashboards.
         run: pip-audit -r mps_server/requirements.txt --strict --format json -o pip-audit.json
-        continue-on-error: true
       - name: Upload pip-audit results
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: pip-audit-results
           path: pip-audit.json
@@ -75,7 +76,7 @@ jobs:
       - name: Scan SBOM with Grype
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.74.0
-          grype sbom:sbom-python.json --fail-on high --output json > grype-results.json || true
+          grype sbom:sbom-python.json --fail-on high --output json > grype-results.json
       - name: Upload Grype results
         uses: actions/upload-artifact@v4
         if: always()
