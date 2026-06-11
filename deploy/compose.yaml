@@ -58,7 +58,10 @@ services:
       FORCE_HTTPS: "false"
       LOG_FORMAT: json
       ALLOW_SIGNUP: "false"
-    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password]
+      # Ed25519 public key for verifying signed policy manifests (V3-C3 / V-C1).
+      # Points directly at the Docker secret path so no extra volume mount is needed.
+      POLICY_PUBLIC_KEY: /run/secrets/policy_public_key
+    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key]
     networks: [backend]
     depends_on:
       postgres:
@@ -75,7 +78,7 @@ services:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE}
     restart: unless-stopped
     environment: *server_environment
-    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password]
+    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key]
     networks: [backend]
     depends_on:
       migrate:
@@ -154,6 +157,8 @@ secrets:
     file: ./secrets/bootstrap_admin_password.txt
   alert_webhook_url:
     file: ./secrets/alert_webhook_url.txt
+  policy_public_key:
+    file: ./secrets/policy_public_key.pem
 
 networks:
   edge: {}

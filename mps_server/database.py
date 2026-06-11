@@ -55,7 +55,10 @@ class User(Base):
     hashed_pw     = Column(String, nullable=False)
     role          = Column(String, nullable=False)
     full_name     = Column(String, nullable=False)
-    totp_secret   = Column(String, nullable=True)
+    totp_secret          = Column(String, nullable=True)
+    pending_totp_secret  = Column(String, nullable=True)
+    mfa_enabled          = Column(Boolean, default=False)
+    recovery_codes       = Column(Text, nullable=True)   # JSON list of bcrypt hashes
     is_active     = Column(Boolean, default=True)
     failed_logins = Column(Integer, default=0)
     locked_until  = Column(DateTime, nullable=True)

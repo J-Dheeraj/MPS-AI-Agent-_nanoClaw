@@ -224,13 +224,13 @@ class MfaActivateRequest(BaseModel):
 
 @router.post("/mfa/enroll")
 def mfa_enroll(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Begin TOTP enrolment: generate a secret and return the provisioning URI.
-    The secret is stored but MFA is only enforced once /mfa/activate confirms a
-    valid code, so a half-finished enrolment cannot lock the user out."""
-    if current_user.totp_secret:
+    """Begin TOTP enrolment. Stores the secret in *pending_totp_secret* (not
+    totp_secret) until /mfa/activate confirms a valid code. This means an
+    interrupted enrolment cannot lock the user out before activation (V3-C1)."""
+    if current_user.mfa_enabled:
         raise HTTPException(409, "MFA is already enabled for this account")
     secret = pyotp.random_base32()
-    current_user.totp_secret = secret
+    current_user.pending_totp_secret = secret
     db.commit()
     uri = pyotp.TOTP(secret).provisioning_uri(
         name=current_user.username, issuer_name="MPS AI Agent"
@@ -242,15 +242,26 @@ def mfa_enroll(current_user: User = Depends(get_current_user), db: Session = Dep
 @router.post("/mfa/activate")
 def mfa_activate(req: MfaActivateRequest, request: Request,
                  current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Confirm enrolment by verifying a code against the pending secret."""
-    from ..auth import verify_totp
-    if not current_user.totp_secret:
+    """Confirm enrolment. Verifies the code against *pending_totp_secret* (not
+    totp_secret) and only then promotes it to the active secret and sets
+    mfa_enabled. If the user never calls this endpoint, MFA is not enforced —
+    they cannot be locked out by an incomplete enrolment (V3-C1)."""
+    from ..auth import verify_totp, generate_recovery_codes
+    if not current_user.pending_totp_secret:
         raise HTTPException(400, "Start enrolment via /auth/mfa/enroll first")
-    if not verify_totp(current_user.totp_secret, req.code):
-        raise HTTPException(401, "Invalid MFA code")
+    if not verify_totp(current_user.pending_totp_secret, req.code):
+        raise HTTPException(401, "Invalid MFA code — scan the QR code again or restart enrolment")
+    current_user.totp_secret = current_user.pending_totp_secret
+    current_user.pending_totp_secret = None
+    current_user.mfa_enabled = True
+    recovery_codes = generate_recovery_codes(db, current_user)
     log_event(db, "mfa_activated", user_id=current_user.id, role=current_user.role,
               client_ip=request.client.host if request.client else None)
-    return {"status": "mfa_enabled"}
+    return {
+        "status": "mfa_enabled",
+        "recovery_codes": recovery_codes,
+        "warning": "Store these codes safely — they are shown only once and cannot be recovered",
+    }
 
 
 @router.post("/mfa/disable")
@@ -259,12 +270,56 @@ def mfa_disable(req: MfaActivateRequest, request: Request,
     """Disable MFA. Requires a current valid code so a stolen session cannot
     silently remove the second factor."""
     from ..auth import verify_totp
-    if not current_user.totp_secret:
+    if not current_user.mfa_enabled:
         raise HTTPException(400, "MFA is not enabled")
     if not verify_totp(current_user.totp_secret, req.code):
         raise HTTPException(401, "Invalid MFA code")
     current_user.totp_secret = None
+    current_user.pending_totp_secret = None
+    current_user.mfa_enabled = False
+    current_user.recovery_codes = None
     db.commit()
     log_event(db, "mfa_disabled", user_id=current_user.id, role=current_user.role,
               client_ip=request.client.host if request.client else None)
     return {"status": "mfa_disabled"}
+
+
+@router.post("/mfa/recovery-codes")
+def mfa_regen_recovery_codes(req: MfaActivateRequest, request: Request,
+                              current_user: User = Depends(get_current_user),
+                              db: Session = Depends(get_db)):
+    """Regenerate recovery codes. Requires a valid TOTP code to prove the
+    authenticator app is still working before replacing existing codes."""
+    from ..auth import verify_totp, generate_recovery_codes
+    if not current_user.mfa_enabled:
+        raise HTTPException(400, "MFA is not enabled")
+    if not verify_totp(current_user.totp_secret, req.code):
+        raise HTTPException(401, "Invalid MFA code")
+    codes = generate_recovery_codes(db, current_user)
+    log_event(db, "mfa_recovery_codes_regenerated", user_id=current_user.id,
+              role=current_user.role,
+              client_ip=request.client.host if request.client else None)
+    return {
+        "recovery_codes": codes,
+        "warning": "Old recovery codes are now invalid. Store these safely.",
+    }
+
+
+@router.post("/users/{user_id}/mfa/reset")
+def admin_mfa_reset(user_id: str, request: Request,
+                    _admin: User = Depends(require_admin),
+                    db: Session = Depends(get_db)):
+    """Admin-only: clear MFA for a locked-out user. All MFA state is wiped;
+    the user must re-enrol. Logged for accountability."""
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(404, "User not found")
+    target.totp_secret = None
+    target.pending_totp_secret = None
+    target.mfa_enabled = False
+    target.recovery_codes = None
+    db.commit()
+    log_event(db, "mfa_admin_reset", user_id=target.id, role=target.role,
+              client_ip=request.client.host if request.client else None,
+              details={"reset_by": _admin.id})
+    return {"status": "mfa_reset", "user_id": user_id}

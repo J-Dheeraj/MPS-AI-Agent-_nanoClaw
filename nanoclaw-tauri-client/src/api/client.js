@@ -68,8 +68,11 @@ function safeJson(text) {
  * POST /auth/login -- OAuth2 password form (matches FastAPI's OAuth2PasswordRequestForm)
  * Returns { access_token, token_type, role, ... } per auth_router.py.
  */
-export async function login(username, password) {
-  const form = new URLSearchParams({ username, password }).toString();
+export async function login(username, password, totp = "") {
+  // totp is optional -- users without MFA leave it blank; the server ignores it.
+  const params = { username, password };
+  if (totp && totp.trim()) params.totp = totp.trim();
+  const form = new URLSearchParams(params).toString();
   return request("/auth/login", { method: "POST", body: form, formEncoded: true, auth: false });
 }
 

@@ -150,6 +150,36 @@ def resolve_user_from_token(token: str, db: Session) -> User:
         raise HTTPException(status_code=401, detail="Token role is stale")
     return user
 
+
+import json as _json
+
+
+def generate_recovery_codes(db, user) -> list[str]:
+    """Generate 8 one-time recovery codes for the user. Stores bcrypt hashes."""
+    import secrets as _secrets
+    codes = [_secrets.token_urlsafe(12) for _ in range(8)]
+    user.recovery_codes = _json.dumps([hash_password(c) for c in codes])
+    db.commit()
+    return codes
+
+
+def _consume_recovery_code(db, user, code: str) -> bool:
+    """Try to consume a recovery code. Returns True and deletes the code if valid."""
+    if not user.recovery_codes:
+        return False
+    try:
+        hashes = _json.loads(user.recovery_codes)
+    except Exception:
+        return False
+    for i, h in enumerate(hashes):
+        if verify_password(code, h):
+            hashes.pop(i)
+            user.recovery_codes = _json.dumps(hashes)
+            db.commit()
+            return True
+    return False
+
+
 # ── Login / lockout ───────────────────────────
 
 def authenticate_user(db: Session, username: str, password: str,
@@ -177,8 +207,15 @@ def authenticate_user(db: Session, username: str, password: str,
 
     # Second factor: if the account has MFA enabled, a valid TOTP code is
     # mandatory. A failed code counts as a failed attempt (feeds lockout).
-    if user.totp_secret:
-        if not verify_totp(user.totp_secret, totp_code or ""):
+    # Gate on mfa_enabled, NOT on totp_secret presence, so that an interrupted
+    # enrolment (pending_totp_secret set, mfa_enabled still False) does not
+    # lock the user out before /mfa/activate is completed (V3-C1).
+    if user.mfa_enabled:
+        totp_ok = verify_totp(user.totp_secret, totp_code or "")
+        if not totp_ok and totp_code:
+            # Try recovery code path: one-time codes stored as bcrypt hashes.
+            totp_ok = _consume_recovery_code(db, user, totp_code)
+        if not totp_ok:
             user.failed_logins += 1
             db.commit()
             raise HTTPException(status_code=401, detail="Invalid or missing MFA code")
