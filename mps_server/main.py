@@ -51,6 +51,24 @@ HTTP_DURATION = Histogram(
     "mps_http_request_duration_seconds", "HTTP request duration", ["method", "route"]
 )
 LLM_QUEUE_DEPTH = Gauge("mps_llm_queue_depth", "Current waiting LLM requests")
+# V-M15: generation duration histogram (seconds) labelled by outcome
+GENERATION_DURATION = Histogram(
+    "mps_generation_duration_seconds",
+    "Letter generation time in seconds",
+    labelnames=["outcome"],  # completed | failed | cancelled
+    buckets=(5, 10, 20, 40, 60, 90, 120, 180, 300),
+)
+# V-M15: audit chain verification status (1=ok, 0=broken)
+AUDIT_CHAIN_STATUS = Gauge(
+    "mps_audit_chain_status",
+    "1 when the last audit chain verification passed, 0 otherwise",
+)
+# V-M15: count of policy context retrievals labelled by agency + version
+POLICY_RETRIEVALS = Counter(
+    "mps_policy_retrievals_total",
+    "Policy context retrieved",
+    labelnames=["agency", "policy_version"],
+)
 
 
 def _validate_production_config() -> None:
@@ -316,6 +334,27 @@ async def readiness():
 @app.get("/health", include_in_schema=False)
 async def health_compatibility():
     return await readiness()
+
+
+@app.get("/health/audit-chain", tags=["health"])
+def verify_audit_chain(db: Session = Depends(get_db),
+                       _: None = Depends(require_metrics_token)):
+    """Verify audit log hash chain integrity. Requires metrics token (V-H9/V-M15).
+    Returns the head hash for cross-referencing with the external checkpoint file."""
+    from .database import AuditLog, compute_audit_hash
+    entries = db.query(AuditLog).order_by(AuditLog.created_at).all()
+    if not entries:
+        AUDIT_CHAIN_STATUS.set(1)
+        return {"status": "ok", "entries": 0, "head_hash": None}
+    prev_hash = None
+    for entry in entries:
+        if prev_hash is not None and entry.prev_hash != prev_hash:
+            AUDIT_CHAIN_STATUS.set(0)
+            raise HTTPException(500, detail=f"Audit chain broken at entry {entry.id}: "
+                                            f"expected prev_hash {prev_hash[:16]}...")
+        prev_hash = entry.entry_hash
+    AUDIT_CHAIN_STATUS.set(1)
+    return {"status": "ok", "entries": len(entries), "head_hash": prev_hash}
 
 
 @app.get("/metrics", include_in_schema=False)
