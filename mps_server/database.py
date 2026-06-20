@@ -145,6 +145,11 @@ class GenerationJob(Base):
     finished_at = Column(DateTime, nullable=True)
     error       = Column(Text, nullable=True)
     created_at  = Column(DateTime, default=lambda: __import__("datetime").datetime.now(__import__("datetime").timezone.utc))
+    # C3: durable execution — a running job holds a lease; the reaper re-queues
+    # jobs whose lease expired (crash/hang) until MAX_RETRIES, then fails them.
+    retry_count      = Column(Integer, nullable=False, default=0, server_default="0")
+    lease_expires_at = Column(DateTime, nullable=True)
+    last_error       = Column(Text, nullable=True)
 
 class FeedbackEntry(Base):
     __tablename__ = "feedback_entries"

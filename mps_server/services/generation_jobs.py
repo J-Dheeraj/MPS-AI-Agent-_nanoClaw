@@ -17,9 +17,14 @@ recover_stale_jobs(db, stale_minutes) -> int
   Call on server startup.
 """
 
+import os
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from ..database import GenerationJob
+
+# C3: a running job's lease; the reaper re-queues jobs past this deadline.
+LEASE_SECONDS = int(os.getenv('GENERATION_LEASE_SECONDS', '180'))
+MAX_RETRIES = int(os.getenv('GENERATION_MAX_RETRIES', '3'))
 
 
 def _now():
@@ -51,12 +56,14 @@ def create_job(db: Session, letter_id: str,
 def mark_running(db: Session, job: "GenerationJob") -> None:
     job.status = "running"
     job.started_at = _now()
+    job.lease_expires_at = _now() + timedelta(seconds=LEASE_SECONDS)
     db.commit()
 
 
 def mark_completed(db: Session, job: "GenerationJob") -> None:
     job.status = "completed"
     job.finished_at = _now()
+    job.lease_expires_at = None
     db.commit()
 
 
@@ -93,3 +100,38 @@ def recover_stale_jobs(db: Session, stale_minutes: int = 15) -> int:
     if stale:
         db.commit()
     return len(stale)
+
+
+def reap_expired_jobs(db: Session, max_retries: int = MAX_RETRIES) -> int:
+    """Re-queue running jobs whose lease has expired (crash or hang). Jobs that
+    have already been retried max_retries times are marked failed instead, so a
+    permanently failing job cannot loop forever. Returns the number acted on.
+
+    This is the durable-execution piece (C3): recovery is no longer a one-shot
+    startup reset but a continuous lease reaper. A reconnecting client re-leases
+    a re-queued job via the same idempotency key."""
+    now = _now()
+    expired = (
+        db.query(GenerationJob)
+        .filter(
+            GenerationJob.status == "running",
+            GenerationJob.lease_expires_at.isnot(None),
+            GenerationJob.lease_expires_at < now,
+        )
+        .all()
+    )
+    for job in expired:
+        job.retry_count = (job.retry_count or 0) + 1
+        job.started_at = None
+        job.lease_expires_at = None
+        if job.retry_count > max_retries:
+            job.status = "failed"
+            job.finished_at = now
+            job.last_error = f"lease expired and exceeded {max_retries} retries"
+            job.error = job.last_error
+        else:
+            job.status = "pending"
+            job.last_error = "lease expired; re-queued for retry"
+    if expired:
+        db.commit()
+    return len(expired)

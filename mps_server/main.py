@@ -8,6 +8,7 @@ import logging
 import hmac
 import time
 import json
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -125,7 +126,7 @@ from .routers.cases_router    import router as cases_router
 from .routers.letters_router  import router as letters_router
 from .routers.feedback_router import router as feedback_router
 
-EXPECTED_SCHEMA_REVISION = "20260612_02"
+EXPECTED_SCHEMA_REVISION = "20260620_01"
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -190,15 +191,36 @@ async def lifespan(app: FastAPI):
     _seed_admin()
 
     log.info("mps-server ready")
-    # Recover jobs that were running when the server last crashed (V-H8).
-    from .services.generation_jobs import recover_stale_jobs
+
+    # C3: durable generation recovery. Instead of a one-shot startup reset, a
+    # background reaper re-queues jobs whose lease expired (crash/hang) and
+    # fails those past MAX_RETRIES. Runs immediately, then on an interval.
+    from .services.generation_jobs import reap_expired_jobs, LEASE_SECONDS
     from .database import get_db as _get_db
-    with next(_get_db()) as _db:
-        _n = recover_stale_jobs(_db)
-        if _n:
-            log.warning('Recovered %d stale generation job(s) on startup', _n)
+
+    def _reap_once():
+        with next(_get_db()) as _db:
+            n = reap_expired_jobs(_db)
+            if n:
+                log.warning("Reaped %d expired generation job(s)", n)
+
+    _reap_once()
+
+    async def _reaper_loop():
+        interval = max(30, LEASE_SECONDS // 2)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                await asyncio.to_thread(_reap_once)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("generation job reaper iteration failed")
+
+    _reaper_task = asyncio.create_task(_reaper_loop())
 
     yield
+    _reaper_task.cancel()
     log.info("mps-server shutting down")
 
 
