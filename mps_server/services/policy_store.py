@@ -192,12 +192,17 @@ def load_policy_context(agency: str, case_text: str = "") -> tuple[str, list[dic
             raise PolicyStoreError(f"Invalid policy statement: {file_name}")
         rule_id = str(rule.get("rule_id", file_name))
         supersedes = [str(r) for r in rule.get("supersedes", [])]
+        # I6: optional curated keywords. Deterministic, human-governed metadata
+        # so retrieval matches the case on intended topics rather than only on
+        # incidental statement-word overlap.
+        tags = [str(t).lower().strip() for t in rule.get("tags", []) if str(t).strip()]
         candidate_rules.append({
             "rule_id": rule_id,
             "statement": statement,
             "effective_from": effective_from,
             "source": source,
             "supersedes": supersedes,
+            "tags": tags,
         })
 
     # ── Pass 2: remove superseded rules (V-H6) ───────────────────────────────
@@ -216,7 +221,10 @@ def load_policy_context(agency: str, case_text: str = "") -> tuple[str, list[dic
 
     def _relevance(rule) -> int:
         statement_words = {w for w in re.findall(r"[a-z]{4,}", rule["statement"].lower())}
-        return len(case_words & statement_words)
+        # Curated tag matches count 3x an incidental statement-word match (I6),
+        # so a tagged rule outranks one that merely shares common words.
+        tag_hits = len(case_words & set(rule.get("tags", [])))
+        return 3 * tag_hits + len(case_words & statement_words)
 
     active_rules.sort(key=lambda r: (_relevance(r), r["effective_from"]), reverse=True)
 
