@@ -1,8 +1,8 @@
 # ── FastAPI core ──────────────────────────────────────────────────────────────
-fastapi==0.111.0
-starlette>=0.37.2,<0.38.0         # pinned: fastapi 0.111.0 requires starlette<0.38.0
+fastapi==0.138.0
+starlette>=1.3.1                  # patched (CVE-2024-47874, CVE-2025-54121, CVE-2026-48817/48818/54282/54283); fastapi 0.138 supports starlette 1.x
 uvicorn[standard]==0.29.0
-python-multipart==0.0.9          # form data / file uploads
+python-multipart==0.0.32         # form data / file uploads (patched ReDoS CVE-2024-53981 + 2026 multipart CVEs)
 
 # ── Database ──────────────────────────────────────────────────────────────────
 sqlalchemy==2.0.30
@@ -11,7 +11,7 @@ psycopg[binary]==3.1.19          # PostgreSQL production driver
 alembic==1.13.1                  # versioned schema migrations
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-python-jose[cryptography]==3.3.0  # JWT
+PyJWT==2.13.0                     # JWT (replaced python-jose: unfixable JWE DoS PYSEC-2025-185 + algorithm-confusion PYSEC-2024-232)
 passlib[bcrypt]==1.7.4            # password hashing
 bcrypt==4.0.1                     # pinned: passlib 1.7.4 breaks on bcrypt>=4.1
 
@@ -20,13 +20,13 @@ httpx==0.27.0
 prometheus-client==0.20.0       # service metrics
 
 # ── Env / config ─────────────────────────────────────────────────────────────
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 websockets==12.0                  # used by uvicorn transport
 
 # ── Validation / serialisation ────────────────────────────────────────────────
-pydantic==2.7.1
+pydantic==2.13.4
 pydantic-settings==2.2.1
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
