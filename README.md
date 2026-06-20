@@ -1,5 +1,7 @@
 # MPS-AI-Agent — nanoClaw (Production System)
 
+> **Architecture reconciliation (2026-06-20).** The production policy mechanism is **deterministic, Ed25519-signed JSON policy rules** loaded by the server's `policy_store` from `POLICY_DIR` (manifest + per-rule JSON, validity/supersession/relevance ranking). The legacy "GEPA skill engine" framing and "Markdown SKILL files injected into the prompt" descriptions below are **superseded**: no Markdown skill is injected into letter generation, and proposal generation is deterministic (no LLM converts corrections into policy). "GEPA" persists only as a product name for the deterministic proposal -> human review -> signed promotion pipeline.
+
 A self-hosted AI agent purpose-built for Singapore Members of Parliament conducting **Meet-the-People Sessions (MPS)** and constituency casework.
 
 > **Production hardening update - 10 June 2026:** The supported deployment now includes TLS termination, PostgreSQL migrations, Docker secrets, authenticated metrics and alerts, encrypted backup/restore procedures, manifested policy integrity checks, stricter REST and WebSocket authorisation, token revocation, server-side output blocking, CI, and production release gates. See [`docs/PRODUCTION_ARCHITECTURE.md`](docs/PRODUCTION_ARCHITECTURE.md), [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md), and [`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md).

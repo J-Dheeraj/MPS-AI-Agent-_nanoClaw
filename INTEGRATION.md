@@ -1,5 +1,7 @@
 # INTEGRATION.md — nanoClaw + Hermes Combined System
 
+> **Architecture reconciliation (2026-06-20).** The production policy mechanism is **deterministic, Ed25519-signed JSON policy rules** loaded by the server's `policy_store` from `POLICY_DIR` (manifest + per-rule JSON, validity/supersession/relevance ranking). The legacy "GEPA skill engine" framing and "Markdown SKILL files injected into the prompt" descriptions below are **superseded**: no Markdown skill is injected into letter generation, and proposal generation is deterministic (no LLM converts corrections into policy). "GEPA" persists only as a product name for the deterministic proposal -> human review -> signed promotion pipeline.
+
 > **Correction (2026-06-11):** Hermes does **not** auto-apply skill changes. The pipeline is deterministic and human-promoted: it generates *proposals* from anonymised approved corrections, a human approves each one in the Hermes Review App, and promotion produces an **Ed25519-signed policy manifest** that NanoClaw verifies fail-closed. References below to auto-running or auto-generating `skills/auto/` describe an earlier design and are retained only for context.
 
 

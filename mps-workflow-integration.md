@@ -8,6 +8,8 @@
 
 # MPS Workflow Integration
 
+> **Architecture reconciliation (2026-06-20).** The production policy mechanism is **deterministic, Ed25519-signed JSON policy rules** loaded by the server's `policy_store` from `POLICY_DIR` (manifest + per-rule JSON, validity/supersession/relevance ranking). The legacy "GEPA skill engine" framing and "Markdown SKILL files injected into the prompt" descriptions below are **superseded**: no Markdown skill is injected into letter generation, and proposal generation is deterministic (no LLM converts corrections into policy). "GEPA" persists only as a product name for the deterministic proposal -> human review -> signed promotion pipeline.
+
 ## How NanoClaw works alongside the MPS case management platform
 
 This document explains the relationship between NanoClaw (your AI agent) and your existing MPS case management platform. They are two separate systems that complement each other — NanoClaw never logs into or replaces the platform.
