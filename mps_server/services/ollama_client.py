@@ -12,6 +12,7 @@ Ollama client with a real priority-ordered LLM request queue.
 import asyncio
 import itertools
 import json
+import hashlib
 import re
 import os
 from enum import IntEnum
@@ -227,6 +228,14 @@ _DELIMITER_TAG = re.compile(
 
 def _neutralise(text: str) -> str:
     return _DELIMITER_TAG.sub("", text or "")
+
+
+# I4: immutable prompt provenance. PROMPT_VERSION is a human-readable date;
+# PROMPT_SHA256 is the content hash of the actual system prompts, so a
+# generated letter can be tied to the exact prompt text that produced it
+# even if the version string is forgotten to be bumped.
+PROMPT_SHA256 = hashlib.sha256(
+    (LETTER_SYSTEM + REAPPEAL_SYSTEM).encode('utf-8')).hexdigest()
 
 
 def build_draft_messages(case_type: str, agency: str, notes: str,

@@ -19,11 +19,13 @@ from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sqlalchemy.orm import Session
 from .config import read_secret
+from .correlation import (
+    get_correlation_id, set_correlation_id, new_correlation_id)
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    format="%(asctime)s  %(levelname)-8s  %(name)s  [%(correlation_id)s]  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 class JsonFormatter(logging.Formatter):
@@ -34,6 +36,7 @@ class JsonFormatter(logging.Formatter):
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
+                "correlation_id": get_correlation_id(),
             },
             ensure_ascii=True,
         )
@@ -42,6 +45,14 @@ class JsonFormatter(logging.Formatter):
 if os.getenv("LOG_FORMAT", "text").lower() == "json":
     for handler in logging.getLogger().handlers:
         handler.setFormatter(JsonFormatter())
+
+class _CorrelationFilter(logging.Filter):
+    def filter(self, record):
+        record.correlation_id = get_correlation_id()
+        return True
+
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_CorrelationFilter())
 
 log = logging.getLogger("mps-server")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
@@ -302,6 +313,7 @@ app.add_middleware(
 @app.middleware("http")
 async def security_headers_and_limits(request: Request, call_next):
     started = time.perf_counter()
+    cid = set_correlation_id(request.headers.get("x-correlation-id", ""))
     max_body_bytes = int(os.getenv("MAX_REQUEST_BYTES", "1048576"))
     content_length = request.headers.get("content-length")
     if content_length:
@@ -312,6 +324,7 @@ async def security_headers_and_limits(request: Request, call_next):
             return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
 
     response = await call_next(request)
+    response.headers["X-Correlation-ID"] = cid
     route = getattr(request.scope.get("route"), "path", "unmatched")
     HTTP_REQUESTS.labels(request.method, route, str(response.status_code)).inc()
     HTTP_DURATION.labels(request.method, route).observe(time.perf_counter() - started)

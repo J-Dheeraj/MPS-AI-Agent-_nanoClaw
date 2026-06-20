@@ -15,8 +15,10 @@ from ..services.ollama_client import (
     llm_queue,
     OLLAMA_MODEL,
     PROMPT_VERSION,
+    PROMPT_SHA256,
 )
 from ..services.policy_store import PolicyStoreError, load_policy_context
+from ..correlation import new_correlation_id
 from ..services.validator import (
     validate_letter,
     validate_letter_grounded,
@@ -152,6 +154,7 @@ def update_letter(
 @router.websocket("/ws/draft")
 async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db)):
     """Generate a draft using authenticated, server-owned case context."""
+    _cid = new_correlation_id()
     await websocket.accept()
     user = await _authenticate_websocket(
         websocket, db, {"volunteer", "vetter", "admin"}
@@ -295,10 +298,12 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
         letter.generation_meta = json.dumps({
             "model": OLLAMA_MODEL,
             "prompt_version": PROMPT_VERSION,
+            "prompt_sha256": PROMPT_SHA256,
             "policy_version": policy_version,
             "policy_rule_ids": [src.get("rule_id") for src in policy_sources],
             "validator_version": VALIDATOR_VERSION,
             "warning_codes": [finding.code for finding in findings],
+            "correlation_id": _cid,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         })
         transition(case, "drafted")
