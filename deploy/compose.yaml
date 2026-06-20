@@ -64,7 +64,14 @@ services:
       # External audit anchor (V-H9/V4-C2): a dedicated writable volume on the
       # otherwise read-only server container.
       AUDIT_CHECKPOINT_FILE: /audit/audit_checkpoint.log
-    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key]
+      # C5: sign each checkpoint head so a host admin who can write the volume
+      # still cannot forge a consistent anchor without the key. INFRA NOTE: the
+      # /audit volume below is a local Docker volume — for true non-repudiation
+      # mount a WORM/remote append-only store and/or set
+      # AUDIT_CHECKPOINT_FORWARD_URL to an external immutable sink.
+      AUDIT_CHECKPOINT_SIGNING_KEY: /run/secrets/audit_checkpoint_key
+      AUDIT_CHECKPOINT_PUBLIC_KEY: /run/secrets/audit_checkpoint_pub
+    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key, audit_checkpoint_key, audit_checkpoint_pub]
     networks: [backend]
     depends_on:
       postgres:
@@ -81,7 +88,7 @@ services:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE}
     restart: unless-stopped
     environment: *server_environment
-    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key]
+    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key, audit_checkpoint_key, audit_checkpoint_pub]
     networks: [backend]
     depends_on:
       migrate:
@@ -164,6 +171,10 @@ secrets:
     file: ./secrets/alert_webhook_url.txt
   policy_public_key:
     file: ./secrets/policy_public_key.pem
+  audit_checkpoint_key:
+    file: ./secrets/audit_checkpoint_key.pem
+  audit_checkpoint_pub:
+    file: ./secrets/audit_checkpoint_pub.pem
 
 networks:
   edge: {}

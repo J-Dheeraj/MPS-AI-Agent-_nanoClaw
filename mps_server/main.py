@@ -420,9 +420,18 @@ def verify_audit_chain(db: Session = Depends(get_db),
         if cp.exists():
             lines = [ln for ln in cp.read_text(encoding="utf-8").splitlines() if ln.strip()]
             if lines:
-                anchored_hashes = {ln.split("\t")[2] for ln in lines if len(ln.split("\t")) == 3}
+                anchored_hashes = {ln.split("\t")[2] for ln in lines
+                                   if len(ln.split("\t")) >= 3}
+                # C5: if checkpoint signing is configured, every line's signature
+                # must verify, else the anchor is forged/corrupt.
+                if not all(audit_service.verify_checkpoint_line(ln) for ln in lines):
+                    AUDIT_CHAIN_STATUS.set(0)
+                    raise HTTPException(500, detail="Audit checkpoint signature "
+                                                    "verification failed")
                 if prev_hash in anchored_hashes:
-                    checkpoint = "head_anchored"
+                    checkpoint = ("head_anchored_signed"
+                                  if audit_service._checkpoint_public_key() is not None
+                                  else "head_anchored")
                 else:
                     AUDIT_CHAIN_STATUS.set(0)
                     raise HTTPException(500, detail="Audit head hash is not present in "
