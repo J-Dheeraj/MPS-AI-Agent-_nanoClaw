@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -99,3 +100,25 @@ jobs:
           curl -sSfL https://github.com/zricethezav/gitleaks/releases/download/v8.21.0/gitleaks_8.21.0_linux_x64.tar.gz | tar xz -C /usr/local/bin gitleaks
       - name: Run gitleaks
         run: gitleaks detect --source=. --verbose --exit-code 1
+
+  model-evals:
+    # C4: model-executed evaluation gate. GitHub-hosted runners have no Ollama,
+    # so this runs only on manual dispatch (use a self-hosted runner with the
+    # deployed model, or run 
+    # on the model host). It exits non-zero if any safety threshold is breached.
+    name: Model evaluation (C4)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - run: pip install -r mps_server/requirements.txt
+      - name: Run model evaluations
+        env:
+          RUN_MODEL_EVALS: "1"
+          OLLAMA_URL: ${{ vars.OLLAMA_URL }}
+          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+        run: python -m mps_server.evals.run_evals
