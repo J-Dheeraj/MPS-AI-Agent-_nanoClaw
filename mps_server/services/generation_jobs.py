@@ -19,6 +19,7 @@ recover_stale_jobs(db, stale_minutes) -> int
 
 import os
 from datetime import datetime, timezone, timedelta
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..database import GenerationJob
 
@@ -49,7 +50,23 @@ def create_job(db: Session, letter_id: str,
         created_at=_now(),
     )
     db.add(job)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # I1: two concurrent requests with the same idempotency_key raced past
+        # the query above and both tried to insert. The unique constraint makes
+        # exactly one win; the loser rolls back and returns the winner's row, so
+        # callers still see idempotent behaviour with no duplicate job.
+        db.rollback()
+        if idempotency_key:
+            existing = (
+                db.query(GenerationJob)
+                .filter(GenerationJob.idempotency_key == idempotency_key)
+                .first()
+            )
+            if existing:
+                return existing, False
+        raise
     return job, True
 
 
