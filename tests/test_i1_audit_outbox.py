@@ -78,3 +78,23 @@ def test_production_without_forward_url_aborts(monkeypatch):
 def test_dev_without_forward_url_is_fine(monkeypatch):
     monkeypatch.delenv("AUDIT_CHECKPOINT_FORWARD_URL", raising=False)
     audit_service.assert_forward_configured(is_production=False)  # no raise
+
+
+
+def test_forward_host_allowlist_blocks_disallowed(monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://evil.example/audit")
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", "sink.internal,sink2.internal")
+    with pytest.raises(RuntimeError, match="ALLOWED_HOSTS"):
+        audit_service.assert_forward_configured(is_production=True)
+
+
+def test_forward_host_allowlist_permits_allowed(monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://sink.internal/audit")
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", "sink.internal")
+    audit_service.assert_forward_configured(is_production=True)  # no raise
+
+
+def test_forward_host_allowlist_unset_is_noop(monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://anywhere.example/audit")
+    monkeypatch.delenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", raising=False)
+    audit_service.assert_forward_configured(is_production=True)  # no raise

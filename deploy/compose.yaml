@@ -76,6 +76,9 @@ services:
       # and delivered with retries; supply a bearer token and/or client cert for
       # authenticated transport to the external append-only sink.
       AUDIT_CHECKPOINT_FORWARD_URL: ${AUDIT_CHECKPOINT_FORWARD_URL:?set to the external append-only audit sink}
+      # v7: restrict the audit sink to an approved host set (SSRF/exfil guard).
+      # Comma-separated host[:port]; startup refuses a non-allowlisted URL.
+      AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS: ${AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS:?set to the allowlisted audit sink host(s)}
       AUDIT_CHECKPOINT_FORWARD_TOKEN: /run/secrets/audit_forward_token
       AUDIT_CHECKPOINT_FORWARD_CLIENT_CERT: /run/secrets/audit_forward_client_cert
       AUDIT_CHECKPOINT_FORWARD_CLIENT_KEY: /run/secrets/audit_forward_client_key

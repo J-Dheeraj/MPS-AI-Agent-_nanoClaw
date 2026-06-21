@@ -199,15 +199,9 @@ IMPORTANT — This is a RE-APPEAL of a previously rejected case.
 - Present any new information or changed circumstances
 - Make the case stronger — do not simply repeat the previous letter"""
 
-QA_SYSTEM = """You are a policy assistant helping Singapore MPS volunteers and vetters
-understand government policies and agency procedures.
-
-Answer based on your knowledge of Singapore government schemes (HDB, CPF, MOM, MOH, MSF, ICA, IRAS, MOE, LTA, PA/CDCs).
-If you are not certain, say so clearly — do not fabricate policy details.
-Always note if information may have changed and suggest verification with the agency.
-Keep answers concise and practical."""
-
-
+# v7: the ungrounded QA_SYSTEM (answers from the model's general knowledge) was
+# removed. Only the grounded, context-bound contract below is a supported
+# production path, so the ungrounded variant cannot be reintroduced by mistake.
 GROUNDED_QA_SYSTEM = """You are a policy assistant helping Singapore MPS volunteers and vetters.
 
 Answer only from APPROVED_POLICY_CONTEXT supplied by the application.

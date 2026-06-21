@@ -86,6 +86,22 @@ def forward_url() -> str:
     return os.getenv("AUDIT_CHECKPOINT_FORWARD_URL", "").strip()
 
 
+def _forward_host_allowed(url: str) -> bool:
+    """v7: restrict the audit sink to an approved host set (SSRF/exfil guard).
+
+    AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS is a comma-separated host[:port]
+    allowlist. When unset the check is a no-op (back-compat); production should
+    set it so a compromised config cannot redirect signed heads to an
+    attacker-controlled destination."""
+    raw = os.getenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", "").strip()
+    if not raw:
+        return True
+    from urllib.parse import urlparse
+    allowed = {h.strip().lower() for h in raw.split(",") if h.strip()}
+    host = (urlparse(url).netloc or "").lower()
+    return host in allowed
+
+
 def assert_forward_configured(is_production: bool) -> None:
     """Fail fast if external audit anchoring is mandatory but unconfigured.
 
@@ -97,6 +113,12 @@ def assert_forward_configured(is_production: bool) -> None:
             "AUDIT_CHECKPOINT_FORWARD_URL must be set in production: the signed "
             "audit checkpoint head must be forwarded to an external append-only "
             "sink. Refusing to start without a durable external anchor.")
+    url = forward_url()
+    if url and not _forward_host_allowed(url):
+        raise RuntimeError(
+            "AUDIT_CHECKPOINT_FORWARD_URL host is not in "
+            "AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS. Refusing to forward signed "
+            "audit heads to a non-allowlisted destination.")
 
 
 def _checkpoint_line(entry) -> str:
@@ -119,6 +141,8 @@ def _forward_post(line: str) -> None:
     failure so the caller records the error and retries."""
     import httpx
     url = forward_url()
+    if not _forward_host_allowed(url):
+        raise RuntimeError("audit sink host not in allowlist")
     headers = {"Content-Type": "text/plain"}
     token = os.getenv("AUDIT_CHECKPOINT_FORWARD_TOKEN", "").strip()
     if token:
