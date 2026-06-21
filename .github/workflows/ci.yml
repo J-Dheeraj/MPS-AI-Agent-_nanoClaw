@@ -67,7 +67,11 @@ jobs:
           path: pip-audit.json
       - name: Generate SBOM (syft)
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.0.0/install.sh | sh -s -- -b /usr/local/bin v1.0.0
+          # v9: download the pinned installer and verify its sha256 before running
+          # it (no unchecked curl|sh). Pinned to the v1.0.0 release script.
+          curl -sSfL -o /tmp/syft-install.sh https://raw.githubusercontent.com/anchore/syft/v1.0.0/install.sh
+          echo "39e6c5df8895b91e1b925af3f2ab1571c99140e88cfa472bd64bba5637319e67  /tmp/syft-install.sh" | sha256sum -c -
+          sh /tmp/syft-install.sh -b /usr/local/bin v1.0.0
           syft dir:mps_server --output cyclonedx-json=sbom-python.json
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
@@ -76,7 +80,11 @@ jobs:
           path: sbom-python.json
       - name: Scan SBOM with Grype
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/v0.114.0/install.sh | sh -s -- -b /usr/local/bin v0.114.0
+          # v9: download the pinned installer and verify its sha256 before running
+          # it (no unchecked curl|sh). Pinned to the v0.114.0 release script.
+          curl -sSfL -o /tmp/grype-install.sh https://raw.githubusercontent.com/anchore/grype/v0.114.0/install.sh
+          echo "8646f06a90b10ca64992c1809b4aa00c44e30b4f551f63c309b0b0ab66873556  /tmp/grype-install.sh" | sha256sum -c -
+          sh /tmp/grype-install.sh -b /usr/local/bin v0.114.0
           # v7 C4: fail closed. A fresh vulnerability DB is required; do NOT
           # disable age validation or swallow db-update failure, or a stale DB
           # would yield a green (but untrustworthy) scan. grype >=0.80 uses the
@@ -90,6 +98,43 @@ jobs:
         with:
           name: grype-results
           path: grype-results.json
+
+  pg-concurrency:
+    name: PostgreSQL concurrency (v9)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mps_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - run: pip install --disable-pip-version-check -r mps_server/requirements.txt pytest
+      - name: Run PostgreSQL concurrency suite (must not skip)
+        env:
+          # gated tests run for real here; a skip means the gate is invisible -> fail.
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/mps_test
+        run: |
+          set +e
+          python -m pytest tests/test_pg_concurrency.py -q -rs | tee pg-out.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          if grep -qiE 'skipped|no tests ran' pg-out.txt; then
+            echo 'PostgreSQL concurrency gate was SKIPPED — failing build'; exit 1; fi
+          if [ "$rc" -ne 0 ]; then echo 'PostgreSQL concurrency suite failed'; exit 1; fi
+          echo 'PostgreSQL concurrency suite passed under real concurrency'
 
   secret-scan:
     name: Secret scanning (V3-I6)
