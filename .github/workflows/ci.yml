@@ -76,11 +76,12 @@ jobs:
           path: sbom-python.json
       - name: Scan SBOM with Grype
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.77.0
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.114.0
           # v7 C4: fail closed. A fresh vulnerability DB is required; do NOT
           # disable age validation or swallow db-update failure, or a stale DB
-          # would yield a green (but untrustworthy) scan. grype 0.77 uses a
-          # current DB schema, so the daily DB refreshes legitimately.
+          # would yield a green (but untrustworthy) scan. grype >=0.80 uses the
+          # maintained DB v6 feed (the frozen schema-v5 feed used by <=0.77 is
+          # ~14 weeks stale and always fails the 5-day age check).
           grype db update
           grype sbom:sbom-python.json --fail-on high --output json > grype-results.json
       - name: Upload Grype results
