@@ -67,7 +67,7 @@ jobs:
           path: pip-audit.json
       - name: Generate SBOM (syft)
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.0.0
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.0.0/install.sh | sh -s -- -b /usr/local/bin v1.0.0
           syft dir:mps_server --output cyclonedx-json=sbom-python.json
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
@@ -76,7 +76,7 @@ jobs:
           path: sbom-python.json
       - name: Scan SBOM with Grype
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.114.0
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/v0.114.0/install.sh | sh -s -- -b /usr/local/bin v0.114.0
           # v7 C4: fail closed. A fresh vulnerability DB is required; do NOT
           # disable age validation or swallow db-update failure, or a stale DB
           # would yield a green (but untrustworthy) scan. grype >=0.80 uses the
