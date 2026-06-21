@@ -76,7 +76,7 @@ jobs:
           path: sbom-python.json
       - name: Scan SBOM with Grype
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.74.0
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.77.0
           grype db update
           grype sbom:sbom-python.json --fail-on high --output json > grype-results.json
       - name: Upload Grype results
