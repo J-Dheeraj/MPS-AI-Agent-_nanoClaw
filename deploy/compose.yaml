@@ -71,7 +71,15 @@ services:
       # AUDIT_CHECKPOINT_FORWARD_URL to an external immutable sink.
       AUDIT_CHECKPOINT_SIGNING_KEY: /run/secrets/audit_checkpoint_key
       AUDIT_CHECKPOINT_PUBLIC_KEY: /run/secrets/audit_checkpoint_pub
-    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key, audit_checkpoint_key, audit_checkpoint_pub]
+      # v6 I#1: MANDATORY in production. The server refuses to start if this is
+      # unset while ENVIRONMENT=production. Heads are queued in a durable outbox
+      # and delivered with retries; supply a bearer token and/or client cert for
+      # authenticated transport to the external append-only sink.
+      AUDIT_CHECKPOINT_FORWARD_URL: ${AUDIT_CHECKPOINT_FORWARD_URL:?set to the external append-only audit sink}
+      AUDIT_CHECKPOINT_FORWARD_TOKEN: /run/secrets/audit_forward_token
+      AUDIT_CHECKPOINT_FORWARD_CLIENT_CERT: /run/secrets/audit_forward_client_cert
+      AUDIT_CHECKPOINT_FORWARD_CLIENT_KEY: /run/secrets/audit_forward_client_key
+    secrets: [db_password, jwt_secret, metrics_token, bootstrap_admin_password, policy_public_key, audit_checkpoint_key, audit_checkpoint_pub, audit_forward_token, audit_forward_client_cert, audit_forward_client_key]
     networks: [backend]
     depends_on:
       postgres:
@@ -175,6 +183,12 @@ secrets:
     file: ./secrets/audit_checkpoint_key.pem
   audit_checkpoint_pub:
     file: ./secrets/audit_checkpoint_pub.pem
+  audit_forward_token:
+    file: ./secrets/audit_forward_token.txt
+  audit_forward_client_cert:
+    file: ./secrets/audit_forward_client_cert.pem
+  audit_forward_client_key:
+    file: ./secrets/audit_forward_client_key.pem
 
 networks:
   edge: {}

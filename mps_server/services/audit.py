@@ -82,25 +82,105 @@ def verify_checkpoint_line(line: str) -> bool:
         return False
 
 
-def _forward_checkpoint(line: str) -> None:
-    """Best-effort POST of a signed head line to an external append-only sink
-    (AUDIT_CHECKPOINT_FORWARD_URL). Fire-and-forget; never blocks the audit
-    write or raises. The true WORM/immutable destination is infrastructure."""
-    url = os.getenv("AUDIT_CHECKPOINT_FORWARD_URL", "").strip()
-    if not url:
+def forward_url() -> str:
+    return os.getenv("AUDIT_CHECKPOINT_FORWARD_URL", "").strip()
+
+
+def assert_forward_configured(is_production: bool) -> None:
+    """Fail fast if external audit anchoring is mandatory but unconfigured.
+
+    In production a signed checkpoint head that is never forwarded to an
+    independent append-only sink leaves a host admin able to tamper with the
+    local mutable checkpoint volume undetected. Called from startup."""
+    if is_production and not forward_url():
+        raise RuntimeError(
+            "AUDIT_CHECKPOINT_FORWARD_URL must be set in production: the signed "
+            "audit checkpoint head must be forwarded to an external append-only "
+            "sink. Refusing to start without a durable external anchor.")
+
+
+def _enqueue_forward(db: Session, line: str) -> None:
+    """Durably enqueue a signed head line for forwarding (v6 Important #1).
+
+    Replaces fire-and-forget: the line is persisted to the outbox in the same
+    audit write path. A background worker (deliver_outbox_once) POSTs it to the
+    external append-only sink with authenticated transport and retries, so a
+    stuck sink shows up as a visible backlog instead of being silently lost."""
+    if not forward_url():
         return
+    from ..database import AuditCheckpointOutbox
+    db.add(AuditCheckpointOutbox(line=line))
+    db.commit()
 
-    def _post():
+
+def _forward_post(line: str) -> None:
+    """POST one line to the sink with authenticated transport. Raises on any
+    failure so the caller records the error and retries."""
+    import httpx
+    url = forward_url()
+    headers = {"Content-Type": "text/plain"}
+    token = os.getenv("AUDIT_CHECKPOINT_FORWARD_TOKEN", "").strip()
+    if token:
+        # Support a Docker-secret file path (preferred) or a literal token.
+        tok_path = pathlib.Path(token)
+        if tok_path.exists():
+            token = tok_path.read_text(encoding="utf-8").strip()
+        headers["Authorization"] = f"Bearer {token}"
+    kwargs = {"headers": headers, "timeout": 5.0,
+              "content": line.encode("utf-8")}
+    cert = os.getenv("AUDIT_CHECKPOINT_FORWARD_CLIENT_CERT", "").strip()
+    key = os.getenv("AUDIT_CHECKPOINT_FORWARD_CLIENT_KEY", "").strip()
+    if cert and key:
+        kwargs["cert"] = (cert, key)
+    elif cert:
+        kwargs["cert"] = cert
+    resp = httpx.post(url, **kwargs)
+    resp.raise_for_status()
+
+
+def deliver_outbox_once(db: Session, limit: int = 20) -> tuple[int, int]:
+    """Deliver pending outbox rows to the external sink. Returns
+    (delivered, failed). Each failure increments attempts and records the error
+    so it is retried on the next pass; the inter-pass interval is the backoff."""
+    from ..database import AuditCheckpointOutbox
+    if not forward_url():
+        return (0, 0)
+    pending = (db.query(AuditCheckpointOutbox)
+               .filter(AuditCheckpointOutbox.delivered_at.is_(None))
+               .order_by(AuditCheckpointOutbox.created_at)
+               .limit(limit).all())
+    delivered = failed = 0
+    for row in pending:
         try:
-            import httpx
-            httpx.post(url, content=line.encode("utf-8"), timeout=2.0)
-        except Exception:
-            pass
+            _forward_post(row.line)
+            row.delivered_at = datetime.now(timezone.utc)
+            row.last_error = None
+            delivered += 1
+        except Exception as exc:  # noqa: BLE001 - durable retry, record and move on
+            row.attempts = (row.attempts or 0) + 1
+            row.last_error = str(exc)[:500]
+            failed += 1
+    if pending:
+        db.commit()
+    return (delivered, failed)
 
-    threading.Thread(target=_post, daemon=True).start()
+
+def outbox_backlog(db: Session) -> dict:
+    """Undelivered-count and oldest-undelivered age for /health/audit-chain."""
+    from ..database import AuditCheckpointOutbox
+    rows = (db.query(AuditCheckpointOutbox)
+            .filter(AuditCheckpointOutbox.delivered_at.is_(None))
+            .order_by(AuditCheckpointOutbox.created_at).all())
+    if not rows:
+        return {"undelivered": 0, "oldest_age_seconds": 0}
+    oldest = rows[0].created_at
+    if oldest.tzinfo is None:
+        oldest = oldest.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - oldest).total_seconds()
+    return {"undelivered": len(rows), "oldest_age_seconds": int(age)}
 
 
-def _write_checkpoint(entry) -> None:
+def _write_checkpoint(db, entry) -> None:
     """Append a single-line checkpoint to the anchor file (V-H9).
 
     Format: ISO-timestamp TAB entry-id TAB entry-hash NEWLINE.
@@ -122,7 +202,7 @@ def _write_checkpoint(entry) -> None:
             line = f"{ts}\t{entry.id}\t{entry.entry_hash}\n"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
-        _forward_checkpoint(line)
+        _enqueue_forward(db, line)
     except OSError:
         # Never let checkpoint failure break the audit log itself, but it must
         # not be silent either (V4-C2): without the anchor a tampered DB is
@@ -175,5 +255,5 @@ def log_event(
         entry.entry_hash = compute_audit_hash(entry)
         db.add(entry)
         db.commit()
-        _write_checkpoint(entry)
+        _write_checkpoint(db, entry)
         return entry

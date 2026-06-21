@@ -64,6 +64,11 @@ HTTP_DURATION = Histogram(
     "mps_http_request_duration_seconds", "HTTP request duration", ["method", "route"]
 )
 LLM_QUEUE_DEPTH = Gauge("mps_llm_queue_depth", "Current waiting LLM requests")
+# v6 I#1: durable audit checkpoint forwarding outcomes
+AUDIT_FORWARD_DELIVERED = Counter("mps_audit_forward_delivered_total",
+                                  "Audit checkpoint heads delivered to external sink")
+AUDIT_FORWARD_FAILED = Counter("mps_audit_forward_failed_total",
+                               "Audit checkpoint head delivery failures")
 # V-M15: generation duration histogram (seconds) labelled by outcome
 GENERATION_DURATION = Histogram(
     "mps_generation_duration_seconds",
@@ -137,7 +142,7 @@ from .routers.cases_router    import router as cases_router
 from .routers.letters_router  import router as letters_router
 from .routers.feedback_router import router as feedback_router
 
-EXPECTED_SCHEMA_REVISION = "20260620_01"
+EXPECTED_SCHEMA_REVISION = "20260621_01"
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -203,6 +208,13 @@ async def lifespan(app: FastAPI):
 
     log.info("mps-server ready")
 
+    # v6 I#1: external audit anchoring is mandatory in production. A signed
+    # head that is never forwarded to an independent append-only sink leaves a
+    # host admin able to tamper with the local mutable checkpoint volume. Fail
+    # fast rather than run blind (mirrors the Hermes production reviewer guard).
+    from .services import audit as _audit
+    _audit.assert_forward_configured(IS_PRODUCTION)
+
     # C3: durable generation recovery. Instead of a one-shot startup reset, a
     # background reaper re-queues jobs whose lease expired (crash/hang) and
     # fails those past MAX_RETRIES. Runs immediately, then on an interval.
@@ -260,9 +272,39 @@ async def lifespan(app: FastAPI):
 
     _worker_task = asyncio.create_task(_worker_loop())
 
+    # v6 I#1: audit checkpoint delivery worker. Drains the durable outbox to the
+    # external sink with authenticated transport + retries; records metrics so a
+    # stuck sink is observable rather than silently dropped.
+    _AUDIT_FWD_INTERVAL = max(5, int(os.getenv("AUDIT_FORWARD_INTERVAL", "15")))
+
+    def _deliver_once():
+        with next(_get_db()) as _db:
+            return _audit.deliver_outbox_once(_db)
+
+    async def _audit_forward_loop():
+        if not _audit.forward_url():
+            return
+        while True:
+            try:
+                await asyncio.sleep(_AUDIT_FWD_INTERVAL)
+                delivered, failed = await asyncio.to_thread(_deliver_once)
+                if delivered:
+                    AUDIT_FORWARD_DELIVERED.inc(delivered)
+                if failed:
+                    AUDIT_FORWARD_FAILED.inc(failed)
+                    log.warning("audit checkpoint forwarding: %d delivered, %d failed",
+                                delivered, failed)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("audit checkpoint delivery iteration failed")
+
+    _audit_fwd_task = asyncio.create_task(_audit_forward_loop())
+
     yield
     _reaper_task.cancel()
     _worker_task.cancel()
+    _audit_fwd_task.cancel()
     log.info("mps-server shutting down")
 
 
@@ -475,7 +517,8 @@ def verify_audit_chain(db: Session = Depends(get_db),
     AUDIT_CHAIN_STATUS.set(1)
     return {"status": "ok", "entries": len(entries), "head_hash": prev_hash,
             "checkpoint": checkpoint,
-            "checkpoint_write_failures": audit_service._checkpoint_failures}
+            "checkpoint_write_failures": audit_service._checkpoint_failures,
+            "forward_outbox": audit_service.outbox_backlog(db)}
 
 
 @app.get("/metrics", include_in_schema=False)

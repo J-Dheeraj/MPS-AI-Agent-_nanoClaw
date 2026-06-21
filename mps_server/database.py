@@ -151,6 +151,25 @@ class GenerationJob(Base):
     lease_expires_at = Column(DateTime, nullable=True)
     last_error       = Column(Text, nullable=True)
 
+class AuditCheckpointOutbox(Base):
+    """Durable outbox for signed audit checkpoint heads (v6 Important #1).
+
+    Replaces fire-and-forget forwarding: each signed checkpoint line is enqueued
+    here in the same write path, and a background delivery worker POSTs pending
+    rows to the external append-only sink with authenticated transport and
+    retries. A stuck sink is therefore visible (backlog) and never silently
+    dropped, instead of a thread swallowing the failure.
+    """
+    __tablename__ = "audit_checkpoint_outbox"
+
+    id           = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    line         = Column(Text, nullable=False)
+    created_at   = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    delivered_at = Column(DateTime, nullable=True)
+    attempts     = Column(Integer, nullable=False, default=0, server_default="0")
+    last_error   = Column(Text, nullable=True)
+
+
 class FeedbackEntry(Base):
     __tablename__ = "feedback_entries"
     id              = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
