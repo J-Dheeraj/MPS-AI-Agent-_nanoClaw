@@ -98,3 +98,81 @@ def test_forward_host_allowlist_unset_is_noop(monkeypatch):
     monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://anywhere.example/audit")
     monkeypatch.delenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", raising=False)
     audit_service.assert_forward_configured(is_production=True)  # no raise
+
+
+
+def test_delivery_claims_before_send_no_lock_during_http(db, monkeypatch):
+    """v8: claimed_at is set and committed before the external POST, so no DB
+    row lock is held across the HTTP round-trip."""
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://sink.internal/audit")
+    db.add(AuditCheckpointOutbox(line="2026\tid\thash\tsig\n"))
+    db.commit()
+
+    observed = {}
+
+    def _post_checks_claim(line):
+        # at send time the row must already be claimed and committed
+        row = db.query(AuditCheckpointOutbox).first()
+        observed["claimed_at"] = row.claimed_at
+        observed["delivered_at"] = row.delivered_at
+
+    monkeypatch.setattr(audit_service, "_forward_post", _post_checks_claim)
+    delivered, failed = audit_service.deliver_outbox_once(db)
+    assert (delivered, failed) == (1, 0)
+    assert observed["claimed_at"] is not None      # claimed before send
+    assert observed["delivered_at"] is None        # not yet acked at send time
+    row = db.query(AuditCheckpointOutbox).first()
+    assert row.delivered_at is not None            # acked after send
+    assert row.claimed_at is None                  # claim cleared on success
+
+
+def test_delivery_failure_frees_the_claim(db, monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://sink.internal/audit")
+
+    def _boom(line):
+        raise RuntimeError("sink down")
+
+    monkeypatch.setattr(audit_service, "_forward_post", _boom)
+    db.add(AuditCheckpointOutbox(line="2026\tid\thash\tsig\n"))
+    db.commit()
+    delivered, failed = audit_service.deliver_outbox_once(db)
+    assert (delivered, failed) == (0, 1)
+    row = db.query(AuditCheckpointOutbox).first()
+    assert row.delivered_at is None
+    assert row.claimed_at is None          # lease freed so the next pass retries
+    assert row.attempts == 1
+
+
+def test_stale_claim_is_reclaimed(db, monkeypatch):
+    import datetime as _dt
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://sink.internal/audit")
+    monkeypatch.setattr(audit_service, "_forward_post", lambda line: None)
+    # a row claimed long ago by a crashed sender (claimed_at way in the past)
+    old = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
+        seconds=audit_service.OUTBOX_CLAIM_LEASE_SECONDS + 60)
+    db.add(AuditCheckpointOutbox(line="2026\tid\thash\tsig\n", claimed_at=old))
+    db.commit()
+    delivered, failed = audit_service.deliver_outbox_once(db)
+    assert delivered == 1                  # reclaimed and delivered
+
+
+
+def test_production_requires_https_forward_url(monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "http://sink.internal/audit")
+    monkeypatch.delenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", raising=False)
+    with pytest.raises(RuntimeError, match="https"):
+        audit_service.assert_forward_configured(is_production=True)
+
+
+def test_production_https_forward_url_ok(monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://sink.internal/audit")
+    monkeypatch.delenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", raising=False)
+    audit_service.assert_forward_configured(is_production=True)  # no raise
+
+
+def test_forward_post_refuses_token_over_http(monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "http://sink.internal/audit")
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_TOKEN", "secrettoken")
+    monkeypatch.delenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", raising=False)
+    with pytest.raises(RuntimeError, match="non-https"):
+        audit_service._forward_post("2026\tid\thash\tsig\n")

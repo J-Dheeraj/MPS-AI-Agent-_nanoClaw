@@ -142,7 +142,7 @@ from .routers.cases_router    import router as cases_router
 from .routers.letters_router  import router as letters_router
 from .routers.feedback_router import router as feedback_router
 
-EXPECTED_SCHEMA_REVISION = "20260621_01"
+EXPECTED_SCHEMA_REVISION = "20260621_02"
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager

@@ -38,7 +38,7 @@ def test_signed_checkpoint_line_verifies(tmp_path, monkeypatch):
     class _Entry:
         id = "e1"
         entry_hash = "abc123"
-    audit._write_checkpoint(None, _Entry())
+    audit._append_checkpoint_file(audit._checkpoint_line(_Entry()))
 
     lines = (tmp_path / "cp.log").read_text().splitlines()
     assert len(lines) == 1
@@ -57,7 +57,7 @@ def test_tampered_signed_line_fails_verification(tmp_path, monkeypatch):
     class _Entry:
         id = "e2"
         entry_hash = "goodhash"
-    audit._write_checkpoint(None, _Entry())
+    audit._append_checkpoint_file(audit._checkpoint_line(_Entry()))
     line = (tmp_path / "cp.log").read_text().splitlines()[0]
     ts, eid, _hash, sig = line.split("\t")
     forged = f"{ts}\t{eid}\tFORGEDHASH\t{sig}"

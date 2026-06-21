@@ -4,7 +4,7 @@ Audit service - append-only hash-chained log
 import json
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import os
@@ -119,6 +119,11 @@ def assert_forward_configured(is_production: bool) -> None:
             "AUDIT_CHECKPOINT_FORWARD_URL host is not in "
             "AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS. Refusing to forward signed "
             "audit heads to a non-allowlisted destination.")
+    # v8: never send a bearer credential to the audit sink over plaintext.
+    if is_production and url and not url.lower().startswith("https://"):
+        raise RuntimeError(
+            "AUDIT_CHECKPOINT_FORWARD_URL must use https in production: a bearer "
+            "token would otherwise be exposed in plaintext.")
 
 
 def _checkpoint_line(entry) -> str:
@@ -146,6 +151,10 @@ def _forward_post(line: str) -> None:
     headers = {"Content-Type": "text/plain"}
     token = os.getenv("AUDIT_CHECKPOINT_FORWARD_TOKEN", "").strip()
     if token:
+        # v8: do not transmit credentials over plaintext.
+        if not url.lower().startswith("https://"):
+            raise RuntimeError(
+                "refusing to send audit-forward bearer token over non-https URL")
         # Support a Docker-secret file path (preferred) or a literal token.
         tok_path = pathlib.Path(token)
         if tok_path.exists():
@@ -168,34 +177,63 @@ def _forward_post(line: str) -> None:
     resp.raise_for_status()
 
 
+# v8: how long a claimed-but-undelivered outbox row stays owned before another
+# worker may reclaim it (covers a sender that crashed mid-POST).
+OUTBOX_CLAIM_LEASE_SECONDS = int(os.getenv("AUDIT_OUTBOX_CLAIM_LEASE_SECONDS", "120"))
+
+
 def deliver_outbox_once(db: Session, limit: int = 20) -> tuple[int, int]:
-    """Deliver pending outbox rows to the external sink. Returns
-    (delivered, failed). Each failure increments attempts and records the error
-    so it is retried on the next pass; the inter-pass interval is the backoff."""
+    """Deliver pending outbox rows using a leased claim so NO database row lock
+    is held during the external HTTP round-trip (v8 Important #1).
+
+    Three short transactions per pass: (1) claim a batch (mark claimed_at, commit
+    -> release locks); (2) POST each claimed row with no lock held; (3) ack each
+    (set delivered_at on success, or clear claimed_at + record error on failure).
+    A row whose claim is older than OUTBOX_CLAIM_LEASE_SECONDS is reclaimable, so
+    a crashed sender cannot strand a row. Returns (delivered, failed)."""
     from ..database import AuditCheckpointOutbox
     if not forward_url():
         return (0, 0)
+    now = datetime.now(timezone.utc)
+    stale = now - timedelta(seconds=OUTBOX_CLAIM_LEASE_SECONDS)
     dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+
+    # (1) claim transaction — short, releases locks on commit
     q = (db.query(AuditCheckpointOutbox)
          .filter(AuditCheckpointOutbox.delivered_at.is_(None))
+         .filter((AuditCheckpointOutbox.claimed_at.is_(None)) |
+                 (AuditCheckpointOutbox.claimed_at < stale))
          .order_by(AuditCheckpointOutbox.created_at)
          .limit(limit))
     if dialect == "postgresql":
-        # Lock claimed rows so multiple API replicas never select the same row.
         q = q.with_for_update(skip_locked=True)
-    pending = q.all()
+    claimed = q.all()
+    if not claimed:
+        return (0, 0)
+    claimed_ids = [r.id for r in claimed]
+    payloads = [(r.id, r.line) for r in claimed]
+    for r in claimed:
+        r.claimed_at = now
+    db.commit()  # locks released here; HTTP happens below with no lock held
+
+    # (2) send with no lock held + (3) per-row ack transaction
     delivered = failed = 0
-    for row in pending:
+    for row_id, line in payloads:
+        row = db.query(AuditCheckpointOutbox).filter(
+            AuditCheckpointOutbox.id == row_id).first()
+        if row is None or row.delivered_at is not None:
+            continue
         try:
-            _forward_post(row.line)
+            _forward_post(line)
             row.delivered_at = datetime.now(timezone.utc)
             row.last_error = None
+            row.claimed_at = None
             delivered += 1
         except Exception as exc:  # noqa: BLE001 - durable retry, record and move on
             row.attempts = (row.attempts or 0) + 1
             row.last_error = str(exc)[:500]
+            row.claimed_at = None  # free the lease so the next pass retries
             failed += 1
-    if pending:
         db.commit()
     return (delivered, failed)
 
@@ -227,33 +265,6 @@ def _append_checkpoint_file(line: str) -> None:
         logging.getLogger("mps.audit").error(
             "AUDIT CHECKPOINT WRITE FAILED — external anchor not maintained; "
             "check AUDIT_CHECKPOINT_FILE volume")
-        global _checkpoint_failures
-        _checkpoint_failures += 1
-
-
-def _write_checkpoint(db, entry) -> None:
-    """Append a single-line checkpoint to the anchor file (V-H9).
-
-    Format: ISO-timestamp TAB entry-id TAB entry-hash NEWLINE.
-    The file is opened in append mode with O_APPEND so each write is atomic
-    on POSIX. It should be stored on a different volume or sent to a remote
-    syslog in production for the highest integrity assurance.
-    """
-    try:
-        path = _checkpoint_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        line = _checkpoint_line(entry)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-    except OSError:
-        # Never let checkpoint failure break the audit log itself, but it must
-        # not be silent either (V4-C2): without the anchor a tampered DB is
-        # undetectable, so log loudly and count failures for alerting.
-        import logging
-        logging.getLogger("mps.audit").error(
-            "AUDIT CHECKPOINT WRITE FAILED for entry %s — external anchor is "
-            "not being maintained; check AUDIT_CHECKPOINT_FILE volume",
-            entry.id)
         global _checkpoint_failures
         _checkpoint_failures += 1
 

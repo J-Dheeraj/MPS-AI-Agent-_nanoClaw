@@ -168,6 +168,9 @@ class AuditCheckpointOutbox(Base):
     delivered_at = Column(DateTime, nullable=True)
     attempts     = Column(Integer, nullable=False, default=0, server_default="0")
     last_error   = Column(Text, nullable=True)
+    # v8: a delivery worker claims a row (short txn) before the external POST so
+    # no row lock is held during the HTTP round-trip; a stale claim is reclaimed.
+    claimed_at   = Column(DateTime, nullable=True)
 
 
 class FeedbackEntry(Base):
