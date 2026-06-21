@@ -78,7 +78,11 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.77.0
           rm -rf ~/.cache/grype
-          grype db update
+          for i in {1..3}; do
+            echo "DB update attempt $i/3..."
+            grype db update && break
+            [ $i -lt 3 ] && sleep 5
+          done
           grype sbom:sbom-python.json --fail-on high --output json > grype-results.json
       - name: Upload Grype results
         uses: actions/upload-artifact@v4
