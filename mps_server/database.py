@@ -171,6 +171,9 @@ class AuditCheckpointOutbox(Base):
     # v8: a delivery worker claims a row (short txn) before the external POST so
     # no row lock is held during the HTTP round-trip; a stale claim is reclaimed.
     claimed_at   = Column(DateTime, nullable=True)
+    # v9: random per-claim token; acknowledgement is a compare-and-swap on it so
+    # a worker whose lease expired cannot clobber a row another worker reclaimed.
+    claim_token  = Column(String, nullable=True)
 
 
 class FeedbackEntry(Base):

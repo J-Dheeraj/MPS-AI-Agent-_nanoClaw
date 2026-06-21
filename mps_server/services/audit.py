@@ -210,32 +210,55 @@ def deliver_outbox_once(db: Session, limit: int = 20) -> tuple[int, int]:
     claimed = q.all()
     if not claimed:
         return (0, 0)
-    claimed_ids = [r.id for r in claimed]
+    # v9: stamp a random ownership token on every row claimed in this pass.
+    token = uuid.uuid4().hex
     payloads = [(r.id, r.line) for r in claimed]
     for r in claimed:
         r.claimed_at = now
+        r.claim_token = token
     db.commit()  # locks released here; HTTP happens below with no lock held
 
-    # (2) send with no lock held + (3) per-row ack transaction
+    # (2) send with no lock held + (3) ownership-checked ack (compare-and-swap)
     delivered = failed = 0
     for row_id, line in payloads:
-        row = db.query(AuditCheckpointOutbox).filter(
-            AuditCheckpointOutbox.id == row_id).first()
-        if row is None or row.delivered_at is not None:
-            continue
         try:
             _forward_post(line)
-            row.delivered_at = datetime.now(timezone.utc)
-            row.last_error = None
-            row.claimed_at = None
-            delivered += 1
+            ok = _ack_outbox(db, row_id, token, delivered=True)
+            delivered += 1 if ok else 0
         except Exception as exc:  # noqa: BLE001 - durable retry, record and move on
-            row.attempts = (row.attempts or 0) + 1
-            row.last_error = str(exc)[:500]
-            row.claimed_at = None  # free the lease so the next pass retries
-            failed += 1
-        db.commit()
+            ok = _ack_outbox(db, row_id, token, delivered=False,
+                             error=str(exc)[:500])
+            failed += 1 if ok else 0
     return (delivered, failed)
+
+
+def _ack_outbox(db: Session, row_id: str, token: str, *, delivered: bool,
+                error: str | None = None) -> bool:
+    """Compare-and-swap acknowledgement: only the worker that still owns the row
+    (claim_token matches) may write the outcome. A stale worker whose lease was
+    reclaimed sees rowcount 0 and is a no-op, so it cannot clobber the new owner.
+    Returns True iff this worker owned the row."""
+    from ..database import AuditCheckpointOutbox
+    from sqlalchemy import update
+    if delivered:
+        values = {"delivered_at": datetime.now(timezone.utc),
+                  "last_error": None, "claimed_at": None, "claim_token": None}
+    else:
+        # increment attempts and free the lease for retry
+        row = db.query(AuditCheckpointOutbox).filter(
+            AuditCheckpointOutbox.id == row_id,
+            AuditCheckpointOutbox.claim_token == token).first()
+        if row is None:
+            return False
+        values = {"attempts": (row.attempts or 0) + 1, "last_error": error,
+                  "claimed_at": None, "claim_token": None}
+    result = db.execute(
+        update(AuditCheckpointOutbox)
+        .where(AuditCheckpointOutbox.id == row_id,
+               AuditCheckpointOutbox.claim_token == token)
+        .values(**values))
+    db.commit()
+    return result.rowcount == 1
 
 
 def outbox_backlog(db: Session) -> dict:

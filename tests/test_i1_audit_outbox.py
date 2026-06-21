@@ -176,3 +176,46 @@ def test_forward_post_refuses_token_over_http(monkeypatch):
     monkeypatch.delenv("AUDIT_CHECKPOINT_FORWARD_ALLOWED_HOSTS", raising=False)
     with pytest.raises(RuntimeError, match="non-https"):
         audit_service._forward_post("2026\tid\thash\tsig\n")
+
+
+
+def test_stale_token_ack_is_noop_after_reclaim(db, monkeypatch):
+    """v9: a worker whose lease was reclaimed (claim_token changed) cannot
+    acknowledge the row — its CAS matches nothing and is a no-op."""
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://sink.internal/audit")
+    row = AuditCheckpointOutbox(line="2026\tid\thash\tsig\n",
+                                claimed_at=None, claim_token="STALE")
+    db.add(row)
+    db.commit()
+    row_id = row.id
+    # the new owner has reclaimed it under a different token
+    row.claim_token = "FRESH"
+    db.commit()
+
+    # stale worker tries to ack with its old token -> rejected, no clobber
+    ok_delivered = audit_service._ack_outbox(db, row_id, "STALE", delivered=True)
+    assert ok_delivered is False
+    fresh = db.query(AuditCheckpointOutbox).filter(
+        AuditCheckpointOutbox.id == row_id).first()
+    assert fresh.delivered_at is None          # not marked delivered by stale worker
+    assert fresh.claim_token == "FRESH"        # new owner's claim intact
+
+    # the rightful owner (FRESH token) can ack
+    ok_owner = audit_service._ack_outbox(db, row_id, "FRESH", delivered=True)
+    assert ok_owner is True
+    fresh = db.query(AuditCheckpointOutbox).filter(
+        AuditCheckpointOutbox.id == row_id).first()
+    assert fresh.delivered_at is not None
+    assert fresh.claim_token is None
+
+
+def test_delivery_stamps_token_and_clears_on_success(db, monkeypatch):
+    monkeypatch.setenv("AUDIT_CHECKPOINT_FORWARD_URL", "https://sink.internal/audit")
+    monkeypatch.setattr(audit_service, "_forward_post", lambda line: None)
+    db.add(AuditCheckpointOutbox(line="2026\tid\thash\tsig\n"))
+    db.commit()
+    delivered, failed = audit_service.deliver_outbox_once(db)
+    assert (delivered, failed) == (1, 0)
+    row = db.query(AuditCheckpointOutbox).first()
+    assert row.delivered_at is not None
+    assert row.claim_token is None             # token cleared on ack
