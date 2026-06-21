@@ -250,74 +250,33 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
         return
     mark_running(db, job)
 
-    messages = build_draft_messages(
-        case_type=case.case_type,
-        agency=case.agency,
-        notes=case.notes or "",
-        is_reappeal=is_reappeal,
-        previous_letter=previous_content,
-        rejection_reason=None,
-        policy_context=policy_context,
-    )
-    priority = Priority.URGENT if case.urgency == "urgent" else Priority.NORMAL
+    from ..services.generation_executor import execute_job
 
     try:
-        full_text = ""
-        async for chunk in llm_queue.run(messages, priority=priority):
-            full_text += chunk
-
-        findings = validate_letter_grounded(full_text, policy_context)
-        blocking = [finding for finding in findings if finding.severity == "block"]
-        if blocking:
-            transition(case, "drafted")
-            letter.draft_content = None
-            db.commit()
-            log_event(
-                db,
-                "letter_blocked",
-                user_id=user.id,
-                role=user.role,
-                case_id=case.id,
-                letter_id=letter.id,
-                letter_version=letter.version,
-                details={"codes": [finding.code for finding in blocking]},
-            )
-            mark_failed(db, job, "blocked by validator")
+        # Single source of truth: the same executor the background worker runs.
+        # The WS path passes the already-derived context so behaviour is
+        # identical to the previous inline generation; it then streams the
+        # returned text for UX. A disconnected/crashed job is finished by the
+        # worker instead (main.py lifespan), no client reconnect required.
+        result = await execute_job(
+            db, job,
+            actor_user=user,
+            cid=_cid,
+            is_reappeal=is_reappeal,
+            previous_content=previous_content,
+            policy_bundle=(policy_context, policy_sources, policy_version),
+        )
+        if result["status"] == "blocked":
             await _safe_ws_error(
                 websocket, "Generated draft failed mandatory safety checks"
             )
             return
+        if result["status"] != "completed":
+            await _safe_ws_error(websocket, "Draft generation failed")
+            return
 
-        # Persist validated output before delivery. If the client disconnects
-        # mid-stream, a refresh retrieves the completed draft instead of
-        # regenerating or leaving the case stranded.
-        letter.draft_content = full_text
-        # Generation provenance (V-C2): every letter is traceable to the exact
-        # model, prompt, policy snapshot and validator that produced it, and
-        # records whether any non-blocking grounding warnings remained.
-        letter.generation_meta = json.dumps({
-            "model": OLLAMA_MODEL,
-            "prompt_version": PROMPT_VERSION,
-            "prompt_sha256": PROMPT_SHA256,
-            "policy_version": policy_version,
-            "policy_rule_ids": [src.get("rule_id") for src in policy_sources],
-            "validator_version": VALIDATOR_VERSION,
-            "warning_codes": [finding.code for finding in findings],
-            "correlation_id": _cid,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        })
-        transition(case, "drafted")
-        db.commit()
-        mark_completed(db, job)
-        log_event(
-            db,
-            "letter_drafted",
-            user_id=user.id,
-            role=user.role,
-            case_id=case.id,
-            letter_id=letter.id,
-            letter_version=letter.version,
-        )
+        full_text = result["full_text"]
+        findings = result["findings"]
         for offset in range(0, len(full_text), 256):
             await websocket.send_json(
                 {"type": "chunk", "text": full_text[offset : offset + 256]}
@@ -336,8 +295,8 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
                     }
                     for finding in findings
                 ],
-                "policy_sources": policy_sources,
-                "policy_version": policy_version,
+                "policy_sources": result["policy_sources"],
+                "policy_version": result["policy_version"],
             }
         )
     except WebSocketDisconnect:

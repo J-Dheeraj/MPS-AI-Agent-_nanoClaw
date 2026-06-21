@@ -15,9 +15,9 @@ def test_prompt_sha256_is_stable_content_hash():
 def test_generation_meta_includes_provenance_and_correlation():
     # The draft handler writes prompt_sha256 + correlation_id into the meta dict.
     src = (__import__("pathlib").Path(__file__).resolve().parents[1]
-           / "mps_server/routers/letters_router.py").read_text()
+           / "mps_server/services/generation_executor.py").read_text()
     assert '"prompt_sha256": PROMPT_SHA256' in src
-    assert '"correlation_id": _cid' in src
+    assert '"correlation_id": cid' in src
 
 
 def test_correlation_id_round_trips_through_http(monkeypatch):

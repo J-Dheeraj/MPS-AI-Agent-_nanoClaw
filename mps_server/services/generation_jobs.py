@@ -19,6 +19,7 @@ recover_stale_jobs(db, stale_minutes) -> int
 
 import os
 from datetime import datetime, timezone, timedelta
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..database import GenerationJob
@@ -152,3 +153,39 @@ def reap_expired_jobs(db: Session, max_retries: int = MAX_RETRIES) -> int:
     if expired:
         db.commit()
     return len(expired)
+
+
+
+def claim_pending_job(db: Session, max_retries: int = MAX_RETRIES):
+    """Atomically claim the oldest pending job and mark it running with a fresh
+    lease. Returns the claimed GenerationJob or None if the queue is empty.
+
+    This is what makes recovery *durable* (C4): the background worker claims and
+    executes pending jobs (created, or re-queued by the reaper after a crash or
+    client disconnect) without needing a client to reconnect. PostgreSQL uses
+    SELECT ... FOR UPDATE SKIP LOCKED so multiple workers/replicas never claim
+    the same row; SQLite (development/tests) relies on its single writer.
+    """
+    dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+    if dialect == "postgresql":
+        row = db.execute(text(
+            "SELECT id FROM generation_jobs WHERE status='pending' "
+            "ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED"
+        )).first()
+        if row is None:
+            return None
+        job = db.query(GenerationJob).filter(GenerationJob.id == row[0]).first()
+    else:
+        job = (
+            db.query(GenerationJob)
+            .filter(GenerationJob.status == "pending")
+            .order_by(GenerationJob.created_at)
+            .first()
+        )
+    if job is None:
+        return None
+    job.status = "running"
+    job.started_at = _now()
+    job.lease_expires_at = _now() + timedelta(seconds=LEASE_SECONDS)
+    db.commit()
+    return job

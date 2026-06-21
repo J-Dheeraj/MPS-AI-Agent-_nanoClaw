@@ -14,6 +14,7 @@ from mps_server.database import (
     Base, Case, GenerationJob, Resident, Session, User, get_db,
 )
 from mps_server.routers import letters_router
+from mps_server.services import generation_executor
 from mps_server.routers.letters_router import router
 
 
@@ -63,6 +64,7 @@ def test_ws_draft_creates_and_completes_generation_job(monkeypatch):
     """V4-C1: a live generation run must leave a completed job row."""
     client, db = build_app()
     monkeypatch.setattr(letters_router, "llm_queue", FakeQueue())
+    monkeypatch.setattr(generation_executor, "llm_queue", FakeQueue())
     monkeypatch.setattr(letters_router, "load_policy_context",
                         lambda agency, **kw: ("", [], None))
     token = create_token({"sub": "vol-1", "role": "volunteer"})
@@ -89,6 +91,7 @@ def test_ws_draft_blocked_output_marks_job_failed(monkeypatch):
             yield "Resident S1234567A must be helped immediately."
 
     monkeypatch.setattr(letters_router, "llm_queue", BadQueue())
+    monkeypatch.setattr(generation_executor, "llm_queue", BadQueue())
     monkeypatch.setattr(letters_router, "load_policy_context",
                         lambda agency, **kw: ("", [], None))
     token = create_token({"sub": "vol-1", "role": "volunteer"})

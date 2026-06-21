@@ -230,8 +230,39 @@ async def lifespan(app: FastAPI):
 
     _reaper_task = asyncio.create_task(_reaper_loop())
 
+    # C4: durable generation worker. Claims pending jobs (newly created, or
+    # re-queued by the reaper after a crash/disconnect) and executes them to
+    # completion with no client attached, so work is never stranded until a
+    # human retries. Runs in this event loop alongside the reaper.
+    from .services.generation_jobs import claim_pending_job
+    from .services.generation_executor import execute_job as _execute_job
+    from .database import SessionLocal as _SessionLocal
+
+    _WORKER_INTERVAL = max(2, int(os.getenv("GENERATION_WORKER_INTERVAL", "5")))
+
+    async def _worker_loop():
+        while True:
+            try:
+                await asyncio.sleep(_WORKER_INTERVAL)
+                db = _SessionLocal()
+                try:
+                    job = claim_pending_job(db)
+                    if job is None:
+                        continue
+                    log.info("worker executing pending generation job %s", job.id)
+                    await _execute_job(db, job)
+                finally:
+                    db.close()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("generation worker iteration failed")
+
+    _worker_task = asyncio.create_task(_worker_loop())
+
     yield
     _reaper_task.cancel()
+    _worker_task.cancel()
     log.info("mps-server shutting down")
 
 
