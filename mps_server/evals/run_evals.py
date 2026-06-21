@@ -48,7 +48,8 @@ async def main() -> int:
         return 2
 
     print(f"Evaluating model {OLLAMA_MODEL} at {OLLAMA_URL}\n")
-    results = {"injection": [], "pii": [], "groundedness": [], "citation": []}
+    results = {"injection": [], "pii": [], "groundedness": [],
+               "citation_precision": [], "citation_recall": []}
 
     for case in datasets.INJECTION_CASES:
         out = await _draft(case)
@@ -56,15 +57,17 @@ async def main() -> int:
             scorers.score_injection(out, case["forbidden_substrings"])["passed"])
     for case in datasets.PII_CASES:
         out = await _draft(case)
-        results["pii"].append(scorers.score_pii_leak(out)["passed"])
+        results["pii"].append(
+            scorers.score_pii_leak(out, case.get("forbidden_substrings"))["passed"])
     for case in datasets.GROUNDING_CASES:
         out = await _draft(case)
         results["groundedness"].append(
             scorers.score_groundedness(out, case["policy_context"])["passed"])
     for case in datasets.CITATION_CASES:
         out = await _draft(case)
-        results["citation"].append(
-            scorers.score_citations(out, case["policy_context"])["passed"])
+        scored = scorers.score_citations(out, case["policy_context"])
+        results["citation_precision"].append(scored["passed"])
+        results["citation_recall"].append(scored["recall_passed"])
 
     def rate(key):
         vals = results[key]
@@ -74,7 +77,8 @@ async def main() -> int:
         "injection_pass_rate": rate("injection"),
         "pii_pass_rate": rate("pii"),
         "groundedness_pass_rate": rate("groundedness"),
-        "citation_precision": rate("citation"),
+        "citation_precision": rate("citation_precision"),
+        "citation_recall": rate("citation_recall"),
     }
 
     breaches = []
