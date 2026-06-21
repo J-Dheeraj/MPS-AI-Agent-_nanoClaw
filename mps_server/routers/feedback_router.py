@@ -4,7 +4,7 @@ from typing import List, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session as DBSession
 
 from ..auth import require_vetter, require_volunteer
@@ -27,8 +27,7 @@ class FeedbackCreate(BaseModel):
     incorrect_claim: str = Field(min_length=1, max_length=4_000)
     correct_answer: str = Field(min_length=1, max_length=4_000)
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class FeedbackValidate(BaseModel):
@@ -38,8 +37,7 @@ class FeedbackValidate(BaseModel):
     source_url: Optional[str] = Field(default=None, max_length=2_000)
     effective_date: Optional[str] = None
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class FeedbackOut(BaseModel):
@@ -57,8 +55,7 @@ class FeedbackOut(BaseModel):
     created_at: datetime
     validated_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 def _validate_source(source_title: str, source_url: str, effective_date: str) -> None:

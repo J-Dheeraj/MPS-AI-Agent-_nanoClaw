@@ -27,7 +27,7 @@ websockets==12.0                  # used by uvicorn transport
 
 # ── Validation / serialisation ────────────────────────────────────────────────
 pydantic==2.13.4
-pydantic-settings==2.2.1
+pydantic-settings==2.7.1  # align to pydantic 2.13 line (v6 review tech-debt)
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 pyotp==2.9.0                      # TOTP two-factor (future)

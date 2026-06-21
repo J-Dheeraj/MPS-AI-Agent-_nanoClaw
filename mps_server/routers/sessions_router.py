@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session as DBSession
 from ..database import Session, Case, get_db, User
 from ..auth import require_volunteer, require_admin, get_current_user
 from ..services.audit import log_event
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -13,7 +13,7 @@ class SessionOut(BaseModel):
     id: str; date: str; status: str
     total_cases: int; completed_cases: int; carried_over: int
     opened_at: Optional[str]; closed_at: Optional[str]
-    class Config: from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 @router.get("/current")
 def get_current_session(
