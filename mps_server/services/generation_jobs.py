@@ -19,7 +19,7 @@ recover_stale_jobs(db, stale_minutes) -> int
 
 import os
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..database import GenerationJob
@@ -34,8 +34,15 @@ def _now():
 
 
 def create_job(db: Session, letter_id: str,
-               idempotency_key: str | None = None) -> tuple["GenerationJob", bool]:
-    """Create or return an existing job. Returns (job, created)."""
+               idempotency_key: str | None = None,
+               claim: bool = False) -> tuple["GenerationJob", bool]:
+    """Create or return an existing job. Returns (job, created).
+
+    C1 (v7): when claim=True a *newly created* interactive job is born in
+    'running' with a lease in the same commit, so there is no transient
+    'pending' window for the background worker to claim. This makes the
+    interactive producer and the worker mutually exclusive by construction.
+    """
     if idempotency_key:
         existing = (
             db.query(GenerationJob)
@@ -44,11 +51,14 @@ def create_job(db: Session, letter_id: str,
         )
         if existing:
             return existing, False
+    now = _now()
     job = GenerationJob(
         letter_id=letter_id,
         idempotency_key=idempotency_key,
-        status="pending",
-        created_at=_now(),
+        status="running" if claim else "pending",
+        created_at=now,
+        started_at=now if claim else None,
+        lease_expires_at=(now + timedelta(seconds=LEASE_SECONDS)) if claim else None,
     )
     db.add(job)
     try:
@@ -184,8 +194,25 @@ def claim_pending_job(db: Session, max_retries: int = MAX_RETRIES):
         )
     if job is None:
         return None
-    job.status = "running"
-    job.started_at = _now()
-    job.lease_expires_at = _now() + timedelta(seconds=LEASE_SECONDS)
+    # Confirm ownership with the same compare-and-swap the interactive path uses
+    # so a worker and a reconnecting client can never both win the same row.
+    return job if claim_job(db, job) else None
+
+
+def claim_job(db: Session, job: "GenerationJob") -> bool:
+    """Atomically transition a specific job pending->running with a fresh lease
+    (C1). Returns True iff this caller won ownership. A conditional UPDATE on
+    status='pending' is the compare-and-swap: at most one of N concurrent
+    claimers (worker loop, reconnecting WebSocket) can match the row."""
+    now = _now()
+    result = db.execute(
+        update(GenerationJob)
+        .where(GenerationJob.id == job.id, GenerationJob.status == "pending")
+        .values(status="running", started_at=now,
+                lease_expires_at=now + timedelta(seconds=LEASE_SECONDS))
+    )
     db.commit()
-    return job
+    if result.rowcount == 1:
+        db.refresh(job)
+        return True
+    return False

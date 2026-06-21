@@ -238,17 +238,25 @@ async def draft_letter_ws(websocket: WebSocket, db: DBSession = Depends(get_db))
     # duplicate request for the same version is rejected; a failed or stale
     # job for the version is re-leased and re-run.
     from ..services.generation_jobs import (
-        create_job, mark_running, mark_completed, mark_failed,
+        create_job, claim_job, mark_completed, mark_failed,
     )
+    # C1 (v7): claim ownership atomically. A new job is born 'running' (no
+    # 'pending' window the background worker could claim); an existing pending
+    # job (reaper-requeued reconnect) is taken via the same compare-and-swap,
+    # so the worker and this request can never execute the same job.
     job, job_created = create_job(
-        db, letter_id=letter.id,
+        db, letter.id,
         idempotency_key=f"letter-{letter.id}-v{letter.version}",
+        claim=True,
     )
-    if not job_created and job.status == "running":
-        await _safe_ws_error(websocket, "Generation already in progress for this letter")
-        await _safe_ws_close(websocket, 1008)
-        return
-    mark_running(db, job)
+    if not job_created:
+        if job.status == "pending" and claim_job(db, job):
+            pass  # we won ownership of the re-queued job
+        else:
+            await _safe_ws_error(
+                websocket, "Generation already in progress for this letter")
+            await _safe_ws_close(websocket, 1008)
+            return
 
     from ..services.generation_executor import execute_job
 
