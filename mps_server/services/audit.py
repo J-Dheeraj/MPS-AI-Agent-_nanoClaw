@@ -99,18 +99,19 @@ def assert_forward_configured(is_production: bool) -> None:
             "sink. Refusing to start without a durable external anchor.")
 
 
-def _enqueue_forward(db: Session, line: str) -> None:
-    """Durably enqueue a signed head line for forwarding (v6 Important #1).
+def _checkpoint_line(entry) -> str:
+    """Build the signed checkpoint head line for an audit entry (pure).
 
-    Replaces fire-and-forget: the line is persisted to the outbox in the same
-    audit write path. A background worker (deliver_outbox_once) POSTs it to the
-    external append-only sink with authenticated transport and retries, so a
-    stuck sink shows up as a visible backlog instead of being silently lost."""
-    if not forward_url():
-        return
-    from ..database import AuditCheckpointOutbox
-    db.add(AuditCheckpointOutbox(line=line))
-    db.commit()
+    Format: ISO-timestamp TAB entry-id TAB entry-hash [TAB base64-signature].
+    Ed25519 signing is deterministic, so this is safe to call more than once."""
+    ts = datetime.now(timezone.utc).isoformat()
+    key = _checkpoint_signing_key()
+    if key is not None:
+        import base64
+        sig = base64.b64encode(key.sign(
+            _checkpoint_signed_content(entry.id, entry.entry_hash))).decode("ascii")
+        return f"{ts}\t{entry.id}\t{entry.entry_hash}\t{sig}\n"
+    return f"{ts}\t{entry.id}\t{entry.entry_hash}\n"
 
 
 def _forward_post(line: str) -> None:
@@ -126,6 +127,11 @@ def _forward_post(line: str) -> None:
         if tok_path.exists():
             token = tok_path.read_text(encoding="utf-8").strip()
         headers["Authorization"] = f"Bearer {token}"
+    # Sink idempotency (v7 C2): a crash after a successful POST but before
+    # delivered_at is set causes a retry; the sink dedupes on this key.
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) >= 3:
+        headers["Idempotency-Key"] = parts[2]
     kwargs = {"headers": headers, "timeout": 5.0,
               "content": line.encode("utf-8")}
     cert = os.getenv("AUDIT_CHECKPOINT_FORWARD_CLIENT_CERT", "").strip()
@@ -145,10 +151,15 @@ def deliver_outbox_once(db: Session, limit: int = 20) -> tuple[int, int]:
     from ..database import AuditCheckpointOutbox
     if not forward_url():
         return (0, 0)
-    pending = (db.query(AuditCheckpointOutbox)
-               .filter(AuditCheckpointOutbox.delivered_at.is_(None))
-               .order_by(AuditCheckpointOutbox.created_at)
-               .limit(limit).all())
+    dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+    q = (db.query(AuditCheckpointOutbox)
+         .filter(AuditCheckpointOutbox.delivered_at.is_(None))
+         .order_by(AuditCheckpointOutbox.created_at)
+         .limit(limit))
+    if dialect == "postgresql":
+        # Lock claimed rows so multiple API replicas never select the same row.
+        q = q.with_for_update(skip_locked=True)
+    pending = q.all()
     delivered = failed = 0
     for row in pending:
         try:
@@ -180,6 +191,22 @@ def outbox_backlog(db: Session) -> dict:
     return {"undelivered": len(rows), "oldest_age_seconds": int(age)}
 
 
+def _append_checkpoint_file(line: str) -> None:
+    """Append a prebuilt signed line to the local anchor file (best-effort)."""
+    try:
+        path = _checkpoint_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        import logging
+        logging.getLogger("mps.audit").error(
+            "AUDIT CHECKPOINT WRITE FAILED — external anchor not maintained; "
+            "check AUDIT_CHECKPOINT_FILE volume")
+        global _checkpoint_failures
+        _checkpoint_failures += 1
+
+
 def _write_checkpoint(db, entry) -> None:
     """Append a single-line checkpoint to the anchor file (V-H9).
 
@@ -191,18 +218,9 @@ def _write_checkpoint(db, entry) -> None:
     try:
         path = _checkpoint_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(timezone.utc).isoformat()
-        key = _checkpoint_signing_key()
-        if key is not None:
-            import base64
-            sig = base64.b64encode(key.sign(
-                _checkpoint_signed_content(entry.id, entry.entry_hash))).decode("ascii")
-            line = f"{ts}\t{entry.id}\t{entry.entry_hash}\t{sig}\n"
-        else:
-            line = f"{ts}\t{entry.id}\t{entry.entry_hash}\n"
+        line = _checkpoint_line(entry)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line)
-        _enqueue_forward(db, line)
     except OSError:
         # Never let checkpoint failure break the audit log itself, but it must
         # not be silent either (V4-C2): without the anchor a tampered DB is
@@ -254,6 +272,14 @@ def log_event(
         )
         entry.entry_hash = compute_audit_hash(entry)
         db.add(entry)
+        # v7 C2: the audit entry and its forwarding-outbox row commit in ONE
+        # transaction, so a crash can never leave an audited event without a
+        # durable delivery record. The local file anchor is a separate medium
+        # appended best-effort after the commit.
+        line = _checkpoint_line(entry)
+        if forward_url():
+            from ..database import AuditCheckpointOutbox
+            db.add(AuditCheckpointOutbox(line=line))
         db.commit()
-        _write_checkpoint(db, entry)
+        _append_checkpoint_file(line)
         return entry
