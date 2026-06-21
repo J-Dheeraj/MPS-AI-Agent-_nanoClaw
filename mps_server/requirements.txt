@@ -23,7 +23,7 @@ prometheus-client==0.20.0       # service metrics
 python-dotenv==1.2.2
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
-websockets==12.0                  # used by uvicorn transport
+websockets==16.0                  # used by uvicorn transport
 
 # ── Validation / serialisation ────────────────────────────────────────────────
 pydantic==2.13.4
