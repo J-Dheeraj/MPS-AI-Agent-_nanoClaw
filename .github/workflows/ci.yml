@@ -61,7 +61,7 @@ jobs:
         run: pip-audit -r mps_server/requirements.txt --strict --format json -o pip-audit.json
       - name: Upload pip-audit results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pip-audit-results
           path: pip-audit.json
@@ -74,7 +74,7 @@ jobs:
           sh /tmp/syft-install.sh -b /usr/local/bin v1.0.0
           syft dir:mps_server --output cyclonedx-json=sbom-python.json
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sbom-python
           path: sbom-python.json
@@ -93,7 +93,7 @@ jobs:
           grype db update
           grype sbom:sbom-python.json --fail-on high --output json > grype-results.json
       - name: Upload Grype results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: grype-results
@@ -105,7 +105,8 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16
+        # v10: pinned by digest for a reproducible, integrity-verified service image
+        image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mps_test
@@ -148,7 +149,10 @@ jobs:
           fetch-depth: 0
       - name: Install gitleaks
         run: |
-          curl -sSfL https://github.com/zricethezav/gitleaks/releases/download/v8.21.0/gitleaks_8.21.0_linux_x64.tar.gz | tar xz -C /usr/local/bin gitleaks
+          # v10: download + verify sha256 before extracting (no unchecked curl|tar).
+          curl -sSfL -o /tmp/gitleaks.tar.gz https://github.com/zricethezav/gitleaks/releases/download/v8.21.0/gitleaks_8.21.0_linux_x64.tar.gz
+          echo "6c3a240509647225997d31df06e872350e1c0fe2fb85d323ae29a9fef0012586  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar xz -C /usr/local/bin gitleaks -f /tmp/gitleaks.tar.gz
       - name: Run gitleaks
         run: gitleaks detect --source=. --verbose --exit-code 1
 
