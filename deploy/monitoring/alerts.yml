@@ -1,0 +1,71 @@
+# Prometheus alerting rules for MPS-AI-Agent (NanoClaw) — v10 follow-up.
+#
+# Every metric referenced here is actually exported by mps_server (see the
+# Counter/Gauge/Histogram definitions in mps_server/main.py and the /metrics
+# endpoint). Load into Prometheus with:
+#     rule_files: [ "alerts.yml" ]
+# and validate with:  promtool check rules alerts.yml
+#
+# These encode the SLOs documented in deploy/monitoring/SLOs.md. Thresholds are
+# starting points to tune during the pilot, not final SLA commitments.
+groups:
+  - name: mps-integrity
+    rules:
+      # Audit hash-chain integrity is non-negotiable: 0 means a tampered or
+      # broken chain was detected by /health/audit-chain.
+      - alert: AuditChainBroken
+        expr: mps_audit_chain_status == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Audit hash-chain integrity check is FAILING"
+          description: "mps_audit_chain_status=0 — the append-only audit log no longer verifies. Treat as a potential tamper/integrity incident; freeze and investigate."
+
+  - name: mps-audit-forwarding
+    rules:
+      # The external append-only sink is stuck: failures accruing with no
+      # deliveries over 15m means the durable outbox is backing up.
+      - alert: AuditForwardingStalled
+        expr: |
+          increase(mps_audit_forward_failed_total[15m]) > 0
+          and increase(mps_audit_forward_delivered_total[15m]) == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Audit checkpoint forwarding is failing with no successful deliveries"
+          description: "The signed audit heads are not reaching the external sink. Check the sink, AUDIT_CHECKPOINT_FORWARD_URL/token and the outbox backlog (/health/audit-chain forward_outbox)."
+
+  - name: mps-capacity
+    rules:
+      # Generation queue saturation: sustained deep queue degrades drafting UX.
+      - alert: LLMQueueDepthHigh
+        expr: mps_llm_queue_depth > 10
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "LLM generation queue is deep ({{ $value }})"
+          description: "mps_llm_queue_depth > 10 for 10m — Ollama capacity may be saturated. Consider scaling model workers or shedding load."
+
+      # SLO: p95 letter generation latency under 120s.
+      - alert: GenerationLatencyP95High
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(mps_generation_duration_seconds_bucket[10m])) by (le)) > 120
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 letter generation latency exceeds the 120s SLO"
+          description: "Generation p95 > 120s over 10m. Investigate model/queue pressure."
+
+  - name: mps-availability
+    rules:
+      # SLO: HTTP 5xx error ratio under 1%.
+      - alert: Http5xxRatioHigh
+        expr: |
+          sum(rate(mps_http_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(mps_http_requests_total[5m])), 1) > 0.01
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "HTTP 5xx error ratio above 1%"
+          description: "Server error ratio > 1% over 10m — investigate recent deploy, DB or Ollama health."
