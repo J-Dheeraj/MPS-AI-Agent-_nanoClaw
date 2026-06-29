@@ -4,7 +4,37 @@
 
 A self-hosted AI agent purpose-built for Singapore Members of Parliament conducting **Meet-the-People Sessions (MPS)** and constituency casework.
 
-> **Production hardening update - 10 June 2026:** The supported deployment now includes TLS termination, PostgreSQL migrations, Docker secrets, authenticated metrics and alerts, encrypted backup/restore procedures, manifested policy integrity checks, stricter REST and WebSocket authorisation, token revocation, server-side output blocking, CI, and production release gates. See [`docs/PRODUCTION_ARCHITECTURE.md`](docs/PRODUCTION_ARCHITECTURE.md), [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md), and [`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md).
+> **Production readiness — 2026-06-23.** Independent architecture/security reviews now score the system **9.2/10** ("pilot-ready, approaching production-ready"), up from an early-June baseline. Since 10 June the system added durable generation jobs with atomic ownership, an Ed25519-signed + durable audit-forwarding outbox, fail-closed and integrity-verified supply-chain scanning, a mandatory PostgreSQL-16 concurrency CI gate, a model-evaluation harness, a signed release-record with a release eval-gate, Prometheus alerts/SLOs, and operations runbooks. See **Current status & production readiness** below.
+
+## Current status & production readiness (2026-06-23)
+
+External architecture/security reviews score the system **9.2 / 10** — *pilot-ready, approaching production-ready*. The remaining gaps are operational evidence, not code (see the honest boundary at the end of this section).
+
+**Durable, correct generation**
+- Atomic job ownership: interactive jobs are created already `running` with a lease; both the WebSocket path and the background worker take ownership through one compare-and-swap (`claim_job`), so a job is never executed twice.
+- Lease + periodic reaper recover crashed/disconnected jobs; an in-process background worker finishes pending jobs with no client attached.
+
+**Audit integrity**
+- Append-only SHA-256 hash chain **plus Ed25519-signed checkpoint heads** and a **durable forwarding outbox**: HTTPS-only in production, destination host allowlist (SSRF guard), `Idempotency-Key` per head, and owner-token compare-and-swap acknowledgement so a stale worker cannot clobber a reclaimed row. Health: `GET /health/audit-chain`.
+
+**Supply-chain & CI (all gates fail closed)**
+- Vulnerability scan with **grype pinned to v0.114.0**, fresh-DB enforced (no age bypass); **syft / grype / gitleaks installers checksum-verified**; `postgres:16` CI service pinned by digest; GitHub Actions pinned by commit SHA.
+- **Mandatory PostgreSQL-16 concurrency job** runs real two-session contention against the Alembic migration chain and fails the build if it skips. Plus `pip-audit --strict`, SBOM (CycloneDX), and gitleaks secret scanning.
+
+**Model assurance & release governance**
+- Model-evaluation harness with thresholds: prompt-injection, PII leakage, groundedness, and **citation precision and recall = 1.0**.
+- **Signed release record** (`deploy/release/generate_release_record.py`) binds commit + model + prompt hash + policy manifest + validator + dependency-audit + SBOM + eval result; on a `v*` tag the CI gate **fails the release if no model-evaluation result is attached**.
+
+**Monitoring & operations**
+- `deploy/monitoring/` — Prometheus `alerts.yml` (validated by `promtool` in CI) + `SLOs.md`.
+- `deploy/runbooks/` — PostgreSQL restore/failover drill, signing-key lifecycle + break-glass, audit-sink operations.
+- `deploy/audit-sink/reference_sink.py` + `tests/test_audit_sink_contract.py` — a runnable append-only reference sink and a contract test so the external audit sink is **testable, not assumed**.
+
+**Verification:** **113 passed / 7 skipped** (Python suite), bash end-to-end **24/24**, PostgreSQL concurrency green in CI, Alembic schema head **`20260621_03`**. CI is green.
+
+**Honest boundary:** reaching *production-ready* now requires executed evidence outside this repo — running the evaluation against the **production** Ollama model on a trusted runner, deploying and contract-testing a real **WORM audit sink**, executing **backup/restore + failover drills** with measured RPO/RTO, and HA/load testing. The code mechanisms to attach and enforce that evidence (release record + gate, contract test, alert rules, runbooks) are in place.
+
+
 
 Volunteers and vetters use a **cross-platform Tauri v2 desktop app** to draft and approve formal appeal letters with AI assistance. All AI inference runs fully **on-premises via Ollama** — no Anthropic API key, no cloud calls, no constituent data ever leaves the LAN.
 
@@ -550,6 +580,10 @@ All security controls are non-negotiable. No constituent data leaves the LAN.
 | **Feedback isolation** | Only vetter-validated, anonymised corrections (no NRIC, no names, no case content) reach Hermes GEPA. |
 | **No full-NRIC storage** | API rejects any NRIC not matching the masked pattern at `POST /residents/`. |
 | **Double-confirm on freeze** | Vetter's "Submit to MP" requires two separate confirmation clicks. |
+| **Signed audit checkpoints + durable outbox** | Each audit head is Ed25519-signed; forwarding to the external append-only sink is durable (outbox), HTTPS-only in production, host-allowlisted, idempotent, and owner-token CAS-acknowledged. |
+| **Fail-closed dependency scanning** | grype (pinned, fresh-DB-enforced) + pip-audit `--strict` + SBOM + gitleaks; installers checksum-verified, images digest-pinned, actions SHA-pinned. A stale or vulnerable result fails CI. |
+| **Signed release record + eval gate** | A signed record binds commit + model + prompt + policy + validator + scans + eval result; a `v*` release tag fails CI without a model-evaluation result. |
+| **PostgreSQL concurrency gate** | A mandatory CI job exercises real concurrent job claiming and audit delivery on PostgreSQL 16 and fails the build if it skips. |
 
 > **On prompt injection:** Acknowledged open problem. RBAC and LAN isolation significantly limit the blast radius. Do not connect this system to external services without rate-limiting and human review.
 
