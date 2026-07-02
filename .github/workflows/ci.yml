@@ -172,7 +172,7 @@ jobs:
         run: promtool check rules deploy/monitoring/alerts.yml
 
   release-record:
-    name: Generate signed release record
+    name: Release record (signed + verified on v* tags)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

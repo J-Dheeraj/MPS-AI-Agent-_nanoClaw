@@ -4,11 +4,11 @@
 
 A self-hosted AI agent purpose-built for Singapore Members of Parliament conducting **Meet-the-People Sessions (MPS)** and constituency casework.
 
-> **Production readiness — 2026-07-02.** Independent architecture/security reviews now score the system **9.3/10** ("pilot-ready, approaching production-ready"), up from an early-June baseline. Since 10 June the system added durable generation jobs with atomic ownership, an Ed25519-signed + durable audit-forwarding outbox, fail-closed and integrity-verified supply-chain scanning, a mandatory PostgreSQL-16 concurrency CI gate, a model-evaluation harness, a signed release-record with a release eval-gate, Prometheus alerts/SLOs, and operations runbooks. See **Current status & production readiness** below.
+> **Production readiness — 2026-07-02.** Independent architecture/security reviews now score the system **9.4/10** ("pilot-ready, approaching production-ready"), up from an early-June baseline. Since 10 June the system added durable generation jobs with atomic ownership, an Ed25519-signed + durable audit-forwarding outbox, fail-closed and integrity-verified supply-chain scanning, a mandatory PostgreSQL-16 concurrency CI gate, a model-evaluation harness, a signed release-record with a release eval-gate, Prometheus alerts/SLOs, and operations runbooks. See **Current status & production readiness** below.
 
-## Current status & production readiness (2026-06-23)
+## Current status & production readiness (2026-07-02)
 
-External architecture/security reviews score the system **9.3 / 10** (2026-07-02) — *pilot-ready, approaching production-ready*. The remaining gaps are operational evidence, not code (see the honest boundary at the end of this section).
+External architecture/security reviews score the system **9.4 / 10** (2026-07-02) — *pilot-ready, approaching production-ready*. The remaining gaps are operational evidence, not code (see the honest boundary at the end of this section).
 
 **Durable, correct generation**
 - Atomic job ownership: interactive jobs are created already `running` with a lease; both the WebSocket path and the background worker take ownership through one compare-and-swap (`claim_job`), so a job is never executed twice.

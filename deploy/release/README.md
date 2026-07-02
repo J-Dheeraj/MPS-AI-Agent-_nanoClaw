@@ -1,5 +1,7 @@
 # Release record (signed provenance)
 
+> **Cutting a production release?** Follow [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) — the exact repeatable `v*` tag path (eval handoff, `POLICY_DIR`, signing secrets, failure modes, evidence to retain).
+
 `generate_release_record.py` emits a single canonical JSON record that binds, per
 release, the things the architecture reviews repeatedly asked to be tied
 together (Governance Gaps / Critical #4):
