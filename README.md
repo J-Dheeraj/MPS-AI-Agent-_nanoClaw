@@ -4,11 +4,11 @@
 
 A self-hosted AI agent purpose-built for Singapore Members of Parliament conducting **Meet-the-People Sessions (MPS)** and constituency casework.
 
-> **Production readiness — 2026-06-23.** Independent architecture/security reviews now score the system **9.2/10** ("pilot-ready, approaching production-ready"), up from an early-June baseline. Since 10 June the system added durable generation jobs with atomic ownership, an Ed25519-signed + durable audit-forwarding outbox, fail-closed and integrity-verified supply-chain scanning, a mandatory PostgreSQL-16 concurrency CI gate, a model-evaluation harness, a signed release-record with a release eval-gate, Prometheus alerts/SLOs, and operations runbooks. See **Current status & production readiness** below.
+> **Production readiness — 2026-07-02.** Independent architecture/security reviews now score the system **9.3/10** ("pilot-ready, approaching production-ready"), up from an early-June baseline. Since 10 June the system added durable generation jobs with atomic ownership, an Ed25519-signed + durable audit-forwarding outbox, fail-closed and integrity-verified supply-chain scanning, a mandatory PostgreSQL-16 concurrency CI gate, a model-evaluation harness, a signed release-record with a release eval-gate, Prometheus alerts/SLOs, and operations runbooks. See **Current status & production readiness** below.
 
 ## Current status & production readiness (2026-06-23)
 
-External architecture/security reviews score the system **9.2 / 10** — *pilot-ready, approaching production-ready*. The remaining gaps are operational evidence, not code (see the honest boundary at the end of this section).
+External architecture/security reviews score the system **9.3 / 10** (2026-07-02) — *pilot-ready, approaching production-ready*. The remaining gaps are operational evidence, not code (see the honest boundary at the end of this section).
 
 **Durable, correct generation**
 - Atomic job ownership: interactive jobs are created already `running` with a lease; both the WebSocket path and the background worker take ownership through one compare-and-swap (`claim_job`), so a job is never executed twice.
@@ -17,13 +17,13 @@ External architecture/security reviews score the system **9.2 / 10** — *pilot-
 **Audit integrity**
 - Append-only SHA-256 hash chain **plus Ed25519-signed checkpoint heads** and a **durable forwarding outbox**: HTTPS-only in production, destination host allowlist (SSRF guard), `Idempotency-Key` per head, and owner-token compare-and-swap acknowledgement so a stale worker cannot clobber a reclaimed row. Health: `GET /health/audit-chain`.
 
-**Supply-chain & CI (all gates fail closed)**
+**Supply-chain & CI (scanning gates fail closed on every push; model evaluation runs via `workflow_dispatch` and is enforced on `v*` release tags)**
 - Vulnerability scan with **grype pinned to v0.114.0**, fresh-DB enforced (no age bypass); **syft / grype / gitleaks installers checksum-verified**; `postgres:16` CI service pinned by digest; GitHub Actions pinned by commit SHA.
 - **Mandatory PostgreSQL-16 concurrency job** runs real two-session contention against the Alembic migration chain and fails the build if it skips. Plus `pip-audit --strict`, SBOM (CycloneDX), and gitleaks secret scanning.
 
 **Model assurance & release governance**
 - Model-evaluation harness with thresholds: prompt-injection, PII leakage, groundedness, and **citation precision and recall = 1.0**.
-- **Signed release record** (`deploy/release/generate_release_record.py`) binds commit + model + prompt hash + policy manifest + validator + dependency-audit + SBOM + eval result; on a `v*` tag the CI gate **fails the release if no model-evaluation result is attached**.
+- **Signed release record** (`deploy/release/generate_release_record.py`) binds commit + model + prompt hash + policy manifest + validator + dependency-audit + SBOM + eval result; on a `v*` tag the CI gate **fails the release if no model-evaluation result is attached, if the record is unsigned (`--require-signed`), or if any governance field is null (`--require-complete`)** — and the signature is independently verified in CI (`deploy/release/verify_release_record.py`).
 
 **Monitoring & operations**
 - `deploy/monitoring/` — Prometheus `alerts.yml` (validated by `promtool` in CI) + `SLOs.md`.

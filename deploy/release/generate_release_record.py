@@ -164,6 +164,10 @@ def main(argv=None) -> int:
     ap.add_argument("--eval-result", default="eval.json")
     ap.add_argument("--require-eval", action="store_true",
                     help="fail if no model-evaluation result is present (release gate)")
+    ap.add_argument("--require-signed", action="store_true",
+                    help="fail if RELEASE_SIGNING_KEY is not configured (release gate)")
+    ap.add_argument("--require-complete", action="store_true",
+                    help="fail if any critical governance field is null (release gate)")
     args = ap.parse_args(argv)
 
     record = build_record(args)
@@ -172,6 +176,23 @@ def main(argv=None) -> int:
         print("RELEASE GATE FAILED: model_eval is not present. A production "
               "release must include a model-evaluation result tied to this "
               "commit/model/prompt/policy.", file=sys.stderr)
+        return 1
+
+    if args.require_complete:
+        critical = ["commit", "model", "prompt_version", "prompt_sha256",
+                    "validator_version", "schema_revision",
+                    "policy_manifest_sha256", "dependency_audit", "sbom_sha256"]
+        missing = [k for k in critical if record.get(k) in (None, "", "unknown")]
+        if missing:
+            print("RELEASE GATE FAILED: critical governance fields are null: "
+                  + ", ".join(missing) + ". A production release record must "
+                  "bind every governance identity.", file=sys.stderr)
+            return 1
+
+    if args.require_signed and not os.getenv("RELEASE_SIGNING_KEY", "").strip():
+        print("RELEASE GATE FAILED: RELEASE_SIGNING_KEY is not configured. A "
+              "production release record must be Ed25519-signed so it is "
+              "attributable and independently verifiable.", file=sys.stderr)
         return 1
 
     body = canonical_bytes(record)

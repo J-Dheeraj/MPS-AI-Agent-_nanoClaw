@@ -23,6 +23,14 @@ Unsigned in dev; set `RELEASE_SIGNING_KEY` (Ed25519 PEM) to sign → also writes
 `release-record.json.sig`.
 
 ## Verify the signature
+
+Preferred: the bundled verifier —
+```
+RELEASE_PUBLIC_KEY=release-pub.pem \
+  python3 deploy/release/verify_release_record.py release-record.json
+```
+
+Manual equivalent
 ```
 python3 - <<'PY'
 import base64, json
@@ -36,9 +44,19 @@ print("signature OK")
 PY
 ```
 
-## Release gate (Critical #1)
-On a `v*` tag, CI runs the generator with `--require-eval`, which **fails the
-build if `model_eval` is `not_executed`/absent**. This enforces "every
+## Release gates
+On a `v*` tag, CI runs the generator with three fail-closed flags:
+- `--require-eval` — **fails if `model_eval` is `not_executed`/absent**;
+- `--require-signed` — **fails if `RELEASE_SIGNING_KEY` is not configured**, so
+  a production record can never ship unsigned (2026-07-02 review Critical #2);
+- `--require-complete` — **fails if any critical governance field is null**
+  (commit, model, prompt, validator, schema, policy manifest, dependency audit,
+  SBOM — 2026-07-02 review Important #5).
+
+CI also runs `verify_release_record.py` whenever a signature is present, so a
+signed record that does not verify fails the job (verification is executed, not
+just documented). Configure the `RELEASE_SIGNING_KEY_PEM` / `RELEASE_PUBLIC_KEY_PEM`
+repository secrets (PEM content) to enable signing on tags. This enforces "every
 production release must include a model-evaluation result tied to the exact
 model/prompt/policy/commit" — the eval must be run on the production model (on a
 trusted runner) and its result passed via `--eval-result` before a release tag

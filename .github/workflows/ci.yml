@@ -185,14 +185,43 @@ jobs:
         run: pip-audit -r mps_server/requirements.txt --format json -o pip-audit.json || true
       - name: Generate release record
         run: python3 deploy/release/generate_release_record.py --pip-audit pip-audit.json --out release-record.json
-      - name: Enforce model-eval evidence on release tags
+      - name: Enforce eval + signing + completeness on release tags
         if: startsWith(github.ref, 'refs/tags/v')
-        run: python3 deploy/release/generate_release_record.py --pip-audit pip-audit.json --out release-record.json --require-eval
+        env:
+          RELEASE_SIGNING_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY_PEM }}
+        # Fail-closed release gate (2026-07-02 review Critical#2 + Important#5):
+        # a v* release must carry a model-eval result, be Ed25519-signed, and
+        # have no null governance fields. The secret holds the PEM content; it
+        # is written to a runner-local file because the generator takes a path.
+        run: |
+          if [ -n "$RELEASE_SIGNING_KEY_PEM" ]; then
+            umask 077
+            printf '%s' "$RELEASE_SIGNING_KEY_PEM" > /tmp/release-signing-key.pem
+            export RELEASE_SIGNING_KEY=/tmp/release-signing-key.pem
+          fi
+          python3 deploy/release/generate_release_record.py --pip-audit pip-audit.json --out release-record.json --require-eval --require-signed --require-complete
+      - name: Verify release-record signature (when present)
+        if: always()
+        env:
+          RELEASE_PUBLIC_KEY_PEM: ${{ secrets.RELEASE_PUBLIC_KEY_PEM }}
+        # Independent verification in CI (Critical#2): a signed record that
+        # cannot be verified fails the job — signing cannot become ceremonial.
+        run: |
+          if [ -f release-record.json.sig ]; then
+            printf '%s' "$RELEASE_PUBLIC_KEY_PEM" > /tmp/release-pub.pem
+            export RELEASE_PUBLIC_KEY=/tmp/release-pub.pem
+            python3 deploy/release/verify_release_record.py release-record.json
+          else
+            echo "no signature present (unsigned push build) — skipping verification"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: release-record
-          path: release-record.json
+          path: |
+            release-record.json
+            release-record.json.sig
+          if-no-files-found: warn
 
   model-evals:
     # C4: model-executed evaluation gate. GitHub-hosted runners have no Ollama,
