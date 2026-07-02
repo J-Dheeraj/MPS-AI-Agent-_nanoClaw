@@ -61,7 +61,7 @@ jobs:
         run: pip-audit -r mps_server/requirements.txt --strict --format json -o pip-audit.json
       - name: Upload pip-audit results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pip-audit-results
           path: pip-audit.json
@@ -74,7 +74,7 @@ jobs:
           sh /tmp/syft-install.sh -b /usr/local/bin v1.0.0
           syft dir:mps_server --output cyclonedx-json=sbom-python.json
       - name: Upload SBOM
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sbom-python
           path: sbom-python.json
@@ -93,7 +93,7 @@ jobs:
           grype db update
           grype sbom:sbom-python.json --fail-on high --output json > grype-results.json
       - name: Upload Grype results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: grype-results
@@ -214,7 +214,7 @@ jobs:
           else
             echo "no signature present (unsigned push build) — skipping verification"
           fi
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: release-record
