@@ -1,0 +1,4 @@
+{
+  "result": "drill-sample",
+  "note": "Worked-example release drill; NOT production model evidence. A real release must supply the eval output produced on the trusted production Ollama host (see RELEASE_PROCESS.md step 1)."
+}

@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    # v11: without this the v* release gate can never run — tag pushes did not
+    # trigger the workflow at all (bug found while preparing the release drill).
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -189,6 +192,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           RELEASE_SIGNING_KEY_PEM: ${{ secrets.RELEASE_SIGNING_KEY_PEM }}
+          # v11 (review Important#1): first-class release inputs. Production
+          # points these repo variables at the active signed policy manifest dir
+          # and the prod-model eval output; the drill uses deploy/release/drill/.
+          POLICY_DIR: ${{ vars.RELEASE_POLICY_DIR }}
+          RELEASE_EVAL_PATH: ${{ vars.RELEASE_EVAL_PATH }}
         # Fail-closed release gate (2026-07-02 review Critical#2 + Important#5):
         # a v* release must carry a model-eval result, be Ed25519-signed, and
         # have no null governance fields. The secret holds the PEM content; it
@@ -199,7 +207,7 @@ jobs:
             printf '%s' "$RELEASE_SIGNING_KEY_PEM" > /tmp/release-signing-key.pem
             export RELEASE_SIGNING_KEY=/tmp/release-signing-key.pem
           fi
-          python3 deploy/release/generate_release_record.py --pip-audit pip-audit.json --out release-record.json --require-eval --require-signed --require-complete
+          python3 deploy/release/generate_release_record.py --pip-audit pip-audit.json --out release-record.json --eval-result "${RELEASE_EVAL_PATH:-eval.json}" --require-eval --require-signed --require-complete
       - name: Verify release-record signature (when present)
         if: always()
         env:

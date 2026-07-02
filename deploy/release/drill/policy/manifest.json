@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "note": "DRILL fixture \u2014 sample policy manifest for the worked-example release drill. NOT production policy. A real release must point RELEASE_POLICY_DIR at the active Ed25519-signed manifest.",
+  "entries": []
+}
